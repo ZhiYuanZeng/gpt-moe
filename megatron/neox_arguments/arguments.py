@@ -357,7 +357,7 @@ class NeoXArgs(*BASE_CLASSES):
         return neox_args
 
     @classmethod
-    def consume_neox_args(cls, overwrite_values=None):
+    def consume_neox_args(cls, args_string=None, overwrite_values=None):
         """
         Deepspeed launcher needs to pass the arguments for `pretrain_gpt2.py` across to all machines.
 
@@ -377,7 +377,7 @@ class NeoXArgs(*BASE_CLASSES):
             help="json dict dumped as string in NeoXArgs.get_deepspeed_main_args()",
         )
 
-        args_parsed, _ = parser.parse_known_args()
+        args_parsed, _ = parser.parse_known_args(args_string)
         megatron_config = json.loads(args_parsed.megatron_config)
         if overwrite_values is not None:
             megatron_config.update(overwrite_values)
@@ -446,6 +446,15 @@ class NeoXArgs(*BASE_CLASSES):
         )
         args_list.append(json.dumps(neox_args))
 
+        return args_list
+    
+    def get_main_args(self):
+        args_list = []
+        args_list.append("--megatron_config")
+        neox_args = self.get_parent_class_value_dict(
+            *self.__class__.__bases__, only_non_defaults=True
+        )
+        args_list.append(json.dumps(neox_args))
         return args_list
 
     ############################################################################################################################
@@ -565,19 +574,28 @@ class NeoXArgs(*BASE_CLASSES):
         Configures distributed training arguments from local variables set by deepspeed launcher.
         """
         if self.deepspeed_mpi:
-            from deepspeed.utils.distributed import mpi_discovery
+            from deepspeed.comm import mpi_discovery
 
             mpi_discovery()
-
+        
         if self.deepspeed_slurm:
             os.environ["LOCAL_RANK"] = os.environ["SLURM_LOCALID"]
             os.environ["RANK"] = os.environ["SLURM_PROCID"]
             os.environ["WORLD_SIZE"] = os.environ["SLURM_NTASKS"]
+            # os.environ['MASTER_ADDR'] = os.environ['SLURM_LAUNCH_NODE_IPADDR']
+            import subprocess
+            master_addr = subprocess.check_output('scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1', shell=True)
+            os.environ['MASTER_ADDR'] = master_addr.decode("utf8").strip()
 
-        self.update_value("local_rank", int(os.getenv("LOCAL_RANK", "0")))
-        self.update_value("rank", int(os.getenv("RANK", "0")))
-        self.update_value("world_size", int(os.getenv("WORLD_SIZE", "1")))
-
+        if 'LOCAL_RANK' in os.environ:
+            self.update_value("local_rank", int(os.getenv("LOCAL_RANK", "0")))
+        if 'RANK' in os.environ:
+            self.update_value("rank", int(os.getenv("RANK", "0")))
+        if 'WORLD_SIZE' in os.environ:
+            self.update_value("world_size", int(os.getenv("WORLD_SIZE", "1")))
+            self.update_value("global_num_gpus", int(os.getenv("WORLD_SIZE", "1")))
+        if 'MASTER_ADDR' in os.environ:
+            self.update_value("master_addr", os.getenv("MASTER_ADDR", "1"))
         if self.rank == 0:
             print(
                 self.__class__.__name__
@@ -661,7 +679,9 @@ class NeoXArgs(*BASE_CLASSES):
 
         # number of gpus
         # Get number of GPUs param or hostfile to determine train_batch_size
+        self.configure_distributed_args()
         global_num_gpus = getattr(self, "global_num_gpus", None)
+        
         if global_num_gpus is None:
             if self.hostfile is not None or os.path.exists(DLTS_HOSTFILE):
                 hostfile_path = self.hostfile or DLTS_HOSTFILE
@@ -685,7 +705,6 @@ class NeoXArgs(*BASE_CLASSES):
             + ".calculate_derived() "
             + f"Total number of GPUs determined to be: {global_num_gpus}"
         )
-
         # get world size in the model/pipe parallel case, the actual `world size` deepspeed uses is the size of the
         # data-parallel group, or (num_gpus / mp_size) / pp_size
         pp_size = self.pipe_parallel_size
@@ -714,8 +733,7 @@ class NeoXArgs(*BASE_CLASSES):
             dp_world_size=dp_world_size,
             train_batch=self.train_batch_size,
             micro_batch=self.train_micro_batch_size_per_gpu,
-            grad_acc=self.gradient_accumulation_steps,
-        )
+        ) # ignore the grad_acc, set it automatically
         self.check_batch_parameters(
             dp_world_size=dp_world_size,
             train_batch=train_batch_size,

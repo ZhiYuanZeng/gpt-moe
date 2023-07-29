@@ -51,3 +51,7 @@ from .random import model_parallel_cuda_manual_seed
 
 from .utils import divide
 from .utils import split_tensor_along_last_dim
+
+get_tensor_model_parallel_world_size = get_model_parallel_world_size
+get_tensor_model_parallel_rank = get_model_parallel_rank
+get_tensor_model_parallel_group = get_model_parallel_group

@@ -30,7 +30,7 @@ from megatron.mpu import set_model_parallel_rank, set_model_parallel_world_size
 import deepspeed
 import inspect
 
-from deepspeed.utils import distributed
+import deepspeed.comm as distributed
 
 
 def initialize_megatron(neox_args, allow_no_cuda=False):

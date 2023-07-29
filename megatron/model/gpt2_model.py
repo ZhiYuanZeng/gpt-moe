@@ -36,9 +36,10 @@ from megatron.model.transformer import (
     parallel_lm_logits,
     ParallelLinear,
 )
+from megatron.model.moe_transformer import MoEParallelTransformerLayerPipe
 from megatron.model.gmlp import GMLPBlock
 from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
-
+from megatron.model.criterion import CrossEntropy, MoECrossEnropy
 # Pipeline parallelism
 from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
 from typing import Union, List
@@ -47,28 +48,6 @@ from typing import Union, List
 def gpt2_attention_mask_func(attention_scores, ltor_mask):
     attention_scores.masked_fill_(ltor_mask, -10000.0)
     return attention_scores
-
-
-def cross_entropy(output, labels, _fp16=False):
-    """From pretrain_gpt2:forward_step()"""
-    """
-    if self.fp16_lm_cross_entropy:
-        assert output.dtype == torch.half
-        loss = mpu.vocab_parallel_cross_entropy(output, labels)
-    else:
-        loss = mpu.vocab_parallel_cross_entropy(output.float(), labels)
-        return loss
-    """
-    labels, loss_mask = labels[0], labels[1]
-    if _fp16:
-        assert output.dtype == torch.half and loss_mask.dtype == torch.half
-        losses = mpu.vocab_parallel_cross_entropy(output.contiguous(), labels)
-    else:
-        losses = mpu.vocab_parallel_cross_entropy(output.float().contiguous(), labels)
-    loss_mask = loss_mask.view(-1)
-    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
-    return loss
-
 
 def _pre_transformer_block(args):
     # data format change for hidden_states to avoid explicit tranposes : [b s h] --> [s b h]
@@ -83,6 +62,13 @@ def _post_transformer_block(args):
     assert len(args) == 2, "Incorrect number of arguments to _post_transformer_block"
     fn = lambda _args: (_args[0].transpose(0, 1).contiguous())
     return fn(args)
+
+def _post_moe_transformer_block(args):
+    # from (hidden_states, attention_mask, l_auxs)
+    # to (hidden_states.T)
+    assert len(args) == 3, "Incorrect number of arguments to _post_moe_transformer_block"
+    fn = lambda _args: (_args[0].transpose(0, 1).contiguous())
+    return fn(args), args[-1]
 
 
 class GPT2ModelPipe(PipelineModule, torch.nn.Module):
@@ -119,10 +105,14 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
         self.specs = []
         self.init_specs()  # initializes the layer specs (basically a fancy nn.Sequential)
+        if neox_args.moe_freq>0:
+            self.criterion = MoECrossEnropy(moe_loss_weight=self.neox_args.moe_loss_weight, _fp16=self.neox_args.fp16_lm_cross_entropy)
+        else:
+            self.criterion = CrossEntropy(_fp16=self.neox_args.fp16_lm_cross_entropy)
 
         super().__init__(
             layers=self.specs,
-            loss_fn=partial(cross_entropy, _fp16=self.neox_args.fp16_lm_cross_entropy),
+            loss_fn=self.criterion.forward,
             topology=topology,
             activation_checkpoint_interval=self.neox_args.checkpoint_num_layers
             if self.neox_args.checkpoint_activations
@@ -237,9 +227,13 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                     )
                 )
             else:
+                if self.neox_args.moe_freq > 0 and i%self.neox_args.moe_freq==(self.neox_args.moe_freq-1):
+                    layer_cls = MoEParallelTransformerLayerPipe
+                else:
+                    layer_cls = ParallelTransformerLayerPipe
                 self.specs.append(
                     LayerSpec(
-                        ParallelTransformerLayerPipe,
+                        layer_cls,
                         neox_args=self.neox_args,
                         attention_mask_func=gpt2_attention_mask_func,
                         init_method=self.init_method,
@@ -252,8 +246,11 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 )
 
         # used to drop attention mask + reshape hidden states
-        self.specs.append(_post_transformer_block)
-
+        if self.neox_args.moe_freq > 0:
+            self.specs.append(_post_moe_transformer_block)
+        else:
+            self.specs.append(_post_transformer_block)
+            
         # NormPipe is a (deprecated) helper class that used to be used to pass presents along the pipeline - since presents are now cached to the `TransformerLayer` class this is no longer needed
         norm, eps = get_norm(self.neox_args)
         self.specs.append(
@@ -264,10 +261,15 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
         def _logits_helper(embedding, lm_output):
             """Just a wrapper to massage inputs/outputs from pipeline."""
-            logits = parallel_lm_logits(
-                lm_output, embedding.word_embeddings_weight, self.parallel_output
-            )
-            return logits
+            if isinstance(lm_output, (list, tuple)):
+                logits = parallel_lm_logits(
+                    lm_output[0], embedding.word_embeddings_weight, self.parallel_output
+                )
+                return logits, *lm_output[1:]
+            else:
+                return parallel_lm_logits(
+                    lm_output, embedding.word_embeddings_weight, self.parallel_output
+                )
 
         if weight_tying:
             self.specs.append(
@@ -362,3 +364,6 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
             parent_class_name=self.__class__.__name__,
         )
         return model
+
+    def forward(self, forward_input):
+        return super().forward(forward_input)

@@ -741,25 +741,25 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
     """Extends ParallelTransformerLayer to forward attention_mask through the pipeline."""
 
     def forward(self, args):
-        assert (
-            len(args) == 2
-        ), "ParallelTransformerLayerPipe expects 2 arguments - hidden_states and attention_mask"
-        hidden_states, attention_mask = args
+        # support list args
+        hidden_states, attention_mask = args[0], args[1]
         # we are returning just [hidden_states, mask]
-        return super().forward(hidden_states, attention_mask), attention_mask
+        return super().forward(hidden_states, attention_mask), attention_mask, *args[2:]
 
 
 class ParallelLinearPipe(ParallelLinear):
     """Another helper class to pass presents through to the output when doing inference with a Pipe Parallel model"""
 
     def forward(self, args):
-        assert isinstance(
-            args, torch.Tensor
-        ), "ParallelLinearPipe expects a single argument - hidden_states"
-        hidden_state = args
-        logits, bias = super().forward(hidden_state)
-        return logits
-
+        # support list args
+        if isinstance(args, (list, tuple)):
+            hidden_state = args[0]
+            logits, bias = super().forward(hidden_state)
+            return logits, *args[1:]
+        else:
+            hidden_state = args
+            logits, bias = super().forward(hidden_state)
+            return logits
 
 class NormPipe(nn.Module):
     """Just a helper class to pass presents through to the output when doing inference with a Pipe Parallel model"""
@@ -769,10 +769,14 @@ class NormPipe(nn.Module):
         self.norm = norm_class(hidden_size, eps=eps)
 
     def forward(self, args):
-        assert not isinstance(
-            args, tuple
-        ), "NormPipe should only receive a single tensor as input"
-        return self.norm(args)
+        # assert not isinstance(
+        #     args, tuple
+        # ), "NormPipe should only receive a single tensor as input"
+        # support additional args
+        if isinstance(args, (list, tuple)):
+            return self.norm(args[0]), *args[1:]
+        else:
+            return self.norm(args)
 
 
 def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=None):

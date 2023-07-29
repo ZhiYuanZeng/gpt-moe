@@ -54,8 +54,10 @@ from megatron.utils import (
     get_total_params,
     CharCounter,
 )
-from megatron.model.gpt2_model import cross_entropy
+from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
+from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
+
 
 
 def pretrain(neox_args):
@@ -230,12 +232,18 @@ def forward_step(data_iterator, model, neox_args, timers, return_logits=False):
         timers("batch generator").stop()
 
     outputs = model((tokens, position_ids, attention_mask))
-    loss = cross_entropy(
-        outputs, (labels, loss_mask), _fp16=neox_args.fp16_lm_cross_entropy
+    if isinstance(outputs, tuple):
+        lm_outputs, l_auxs = outputs[0], outputs[1]
+        l_aux = sum(l_auxs) * neox_args.moe_loss_weight
+    else:
+        lm_outputs = outputs
+        l_aux = None
+    lm_loss = cross_entropy(
+        lm_outputs, (labels, loss_mask), _fp16=neox_args.fp16_lm_cross_entropy
     )
     if return_logits:
-        return loss, outputs
-    return loss
+        return lm_loss, l_aux, lm_outputs
+    return lm_loss, l_aux
 
 
 def get_model(neox_args, use_cache=False):
@@ -251,7 +259,7 @@ def get_model(neox_args, use_cache=False):
         topology=mpu.get_topology(),
         use_cache=use_cache,
     )
-
+    print_rank_0(model)
     ### soft prompt tuning stuff ###
     if neox_args.soft_prompt_tuning is not None and neox_args.soft_prompt_tuning.get(
         "enabled", False
@@ -292,6 +300,15 @@ def get_optimizer(model, neox_args):
     print_rank_0(
         f'Configuring Optimizer type: {neox_args.optimizer_type} with params: {neox_args.optimizer["params"]}'
     )
+
+    for g in param_groups:
+        if 'weight_decay' in g:
+            assert g['weight_decay'] == 0
+            g['name'] = 'no_weight_decay'
+        else:
+            g['name'] = 'weight_decay'
+
+    param_groups = split_params_into_different_moe_groups_for_optimizer(param_groups)
 
     # Add model parallel attribute if it is not set.
     for param_group in param_groups:
@@ -406,7 +423,7 @@ def get_learning_rate_scheduler(optimizer, neox_args):
     )
 
     return lr_scheduler
-
+    
 
 def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
     """Setup model and optimizer."""
@@ -418,7 +435,16 @@ def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
         print_rank_0("DeepSpeed is enabled.")
         if neox_args.no_load_optim:
             assert optimizer is None
-            _model_params = None
+            if neox_args.moe_freq > 0:
+                parameters = {
+                    'params': [p for p in model.parameters()],
+                    'name': 'parameters'
+                }
+
+                parameters = split_params_into_different_moe_groups_for_optimizer(parameters)
+                _model_params = parameters
+            else:
+                _model_params = None
             _lr_scheduler = None
         else:
             _model_params = param_groups if optimizer is None else None
@@ -483,23 +509,30 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
     """Single training step."""
 
     # Pipeline parallelism schedules forward/backward/step
+    assert neox_args.is_pipe_parallel
     if neox_args.is_pipe_parallel:
         reduced_loss = train_step_pipe(
             neox_args=neox_args, timers=timers, model=model, data_iterator=data_iterator
         )
     else:
-        losses = []
+        lm_losses = []
+        moe_losses = []
         for _ in range(neox_args.gradient_accumulation_steps):
             # Forward model for one step.
             timers("forward").start()
-            loss = forward_step(
+            lm_loss, moe_loss = forward_step(
                 neox_args=neox_args,
                 timers=timers,
                 data_iterator=data_iterator,
                 model=model,
             )
             timers("forward").stop()
-            losses.append(loss)
+            lm_losses.append(lm_loss)
+            if moe_loss is not None:
+                total_loss += moe_loss
+                moe_losses.append(moe_loss)
+            else:
+                total_loss = lm_loss
             # Calculate gradients, reduce across processes, and clip.
             timers("backward").start()
             backward_step(
@@ -507,7 +540,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
                 timers=timers,
                 optimizer=optimizer,
                 model=model,
-                loss=loss,
+                loss=total_loss,
             )
             timers("backward").stop()
             # Update parameters.
@@ -518,9 +551,10 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
                 raise ValueError("Must be using deepspeed to run neox")
             timers("optimizer").stop()
         reduced_loss = {
-            "lm_loss": reduce_losses(losses).mean()
+            "lm_loss": reduce_losses(lm_losses).mean(),
         }  # reduces losses across machines for logging
-
+        if len(moe_losses) > 0:
+            reduced_loss['moe_loss'] = reduce_losses(moe_losses).mean()
     if neox_args.precision == "fp16" and model.optimizer.overflow:
         skipped_iter = 1
     else:
@@ -531,10 +565,14 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
 
 def train_step_pipe(neox_args, timers, model, data_iterator):
     """Single training step with DeepSpeed's pipeline parallel engine."""
-
     assert neox_args.deepspeed
-    loss = model.train_batch(data_iter=data_iterator)
-    loss_dict = {"lm_loss": loss}
+    total_loss = model.train_batch(data_iter=data_iterator)
+    if hasattr(model.module.criterion, 'logging_loss'):
+        moe_loss = model.module.criterion.logging()
+        loss_dict = {'llm_loss':total_loss-moe_loss, 'moe_loss':moe_loss}
+    else:
+        loss_dict = {'llm_loss':total_loss}
+
     # Don't break Megatron's timers because we changed code paths.
     for t in [
         "forward",
@@ -546,7 +584,6 @@ def train_step_pipe(neox_args, timers, model, data_iterator):
     ]:
         timers(t).reset()
     return loss_dict
-
 
 def train(
     neox_args,
@@ -623,24 +660,27 @@ def train(
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
             )
+            
 
         # Evaluation
         if (
             neox_args.eval_interval
             and iteration % neox_args.eval_interval == 0
-            and neox_args.do_valid
         ):
-            prefix = "iteration {}".format(iteration)
-            evaluate_and_print_results(
-                neox_args=neox_args,
-                prefix=prefix,
-                forward_step_func=forward_step,
-                data_iterator=valid_data_iterator,
-                model=model,
-                iteration=iteration,
-                verbose=False,
-                timers=timers,
-            )
+            if neox_args.do_valid:
+                prefix = "iteration {}".format(iteration)
+                evaluate_and_print_results(
+                    neox_args=neox_args,
+                    prefix=prefix,
+                    forward_step_func=forward_step,
+                    data_iterator=valid_data_iterator,
+                    model=model,
+                    iteration=iteration,
+                    verbose=False,
+                    timers=timers,
+                )
+            else:
+                print_rank_0('skip validation because valid_ds is None'+'.'*10)
 
         if neox_args.exit_interval and iteration % neox_args.exit_interval == 0:
             torch.distributed.barrier()
@@ -670,7 +710,8 @@ def evaluate(
     """
     # Turn on evaluation mode which disables dropout.
     model.eval()
-    losses = []
+    lm_losses = []
+    moe_losses = []
     if neox_args.char_level_ppl:
         data_iterator = CharCounter(data_iterator, neox_args.tokenizer)
 
@@ -692,13 +733,15 @@ def evaluate(
                 else neox_args.gradient_accumulation_steps
             ):
                 # Forward evaluation
-                loss = forward_step_fn(
+                lm_loss, moe_loss = forward_step_fn(
                     model=model,
                     data_iterator=data_iterator,
                     neox_args=neox_args,
                     timers=timers,
                 )
-                losses.append(loss)
+                
+                lm_losses.append(lm_loss)
+                moe_losses.append(moe_loss)
 
             # When contiguous memory optimizations are enabled, the buffers
             # allocated by the optimizations are deallocated during backward pass
@@ -708,7 +751,8 @@ def evaluate(
                 deepspeed.checkpointing.reset()
 
     # reduces losses across processes for logging & run eval harness tasks
-    eval_results = {"lm_loss": reduce_losses(losses).mean().item()}
+    eval_results = {"lm_loss": reduce_losses(lm_losses).mean().item()}
+    eval_results["moe_loss"] = reduce_losses(moe_losses).mean().item()
     eval_results["lm_loss_ppl"] = math.exp(eval_results["lm_loss"])
 
     if neox_args.char_level_ppl:

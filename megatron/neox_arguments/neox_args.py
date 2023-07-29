@@ -359,6 +359,20 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Parameter controlling whether the output layer is parallelized over the hidden dim (row) or the vocab dim (column)
     """
 
+    moe_freq: int = 0
+    
+    moe_num_experts: int = 1
+
+    ep_world_size: int = 1
+
+    moe_top_k: int = 1
+
+    moe_min_capacity: float = 0.
+
+    moe_noisy_gate_policy: str = None
+
+    moe_loss_weight: float = 0.01
+
 
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):
