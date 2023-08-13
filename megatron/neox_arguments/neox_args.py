@@ -373,6 +373,10 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     moe_loss_weight: float = 0.01
 
+    from_dense_to_moe: bool = False
+
+    expert_initialization: str = "zero"
+    # choices: "zero", "from_dense_single_layer", "from_dense_all_layers", "no"
 
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):
@@ -789,6 +793,11 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     load: str = None
     """
     Directory containing a model checkpoint.
+    """
+    
+    load_iteration: int = None
+    """
+    Iteration of checkpoint to be loaded
     """
 
     checkpoint_validation_with_forward_pass: bool = False

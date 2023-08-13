@@ -57,7 +57,7 @@ from megatron.utils import (
 from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
-
+from from_dense_to_moe import transform
 
 
 def pretrain(neox_args):
@@ -85,7 +85,7 @@ def pretrain(neox_args):
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
     model, optimizer, lr_scheduler = setup_model_and_optimizer(
-        neox_args=neox_args, use_cache=False
+        neox_args=neox_args, use_cache=False, iteration=neox_args.load_iteration
     )
     timers("model and optimizer").stop()
 
@@ -423,11 +423,24 @@ def get_learning_rate_scheduler(optimizer, neox_args):
     )
 
     return lr_scheduler
-    
 
-def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
-    """Setup model and optimizer."""
-    model = get_model(neox_args=neox_args, use_cache=use_cache)
+def check_forward(dense_model, moe_model):
+    input_ids1 = torch.randint(size=(8,8), high=128, low=0)
+    position_ids = torch.arange(0, 8)
+    attention_mask = torch.full(size=(8,8), fill_value=False)
+    
+    param_device = next(dense_model.parameters()).device
+    input_ids1, position_ids, attention_mask = input_ids1.to(param_device), position_ids.to(param_device), attention_mask.to(param_device)
+    
+    dense_outputs = dense_model((input_ids1, position_ids, attention_mask))
+    moe_outputs = moe_model((input_ids1, position_ids, attention_mask))
+    if isinstance(moe_outputs, tuple):
+        moe_outputs = moe_outputs[0]
+    assert dense_outputs.shape == moe_outputs.shape
+    # assert torch.allclose(dense_outputs, moe_outputs), f'max distance:{torch.max(torch.abs(dense_outputs - moe_outputs))}'
+
+
+def setup_optim(model, neox_args):
     optimizer, param_groups = get_optimizer(model=model, neox_args=neox_args)
     lr_scheduler = get_learning_rate_scheduler(optimizer=optimizer, neox_args=neox_args)
 
@@ -468,7 +481,13 @@ def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
             model.set_batch_fn(partial(get_batch_pipe, neox_args=neox_args))
     else:
         raise ValueError("Must be using deepspeed to run neox")
+    return model, optimizer, lr_scheduler
 
+def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
+    """Setup model and optimizer."""
+    model = get_model(neox_args=neox_args, use_cache=use_cache)
+
+    model, optimizer, lr_scheduler = setup_optim(model, neox_args) 
     if neox_args.load is not None:
         neox_args.iteration = load_checkpoint(
             neox_args=neox_args,
@@ -480,6 +499,14 @@ def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
         print_rank_0(
             f"Loading checkpoint and starting from iteration {neox_args.iteration}"
         )
+        torch.distributed.barrier()
+        # assert neox_args.from_dense_to_moe
+        if neox_args.from_dense_to_moe:
+            moe_model = transform(model, neox_args, build_model_func=get_model)
+            moe_model, moe_optimizer, moe_lr_scheduler = setup_optim(moe_model, neox_args)
+            check_forward(model, moe_model)
+            model, optimizer, lr_scheduler = moe_model, moe_optimizer, moe_lr_scheduler
+            print_rank_0('Transformed the pretrained dense mode to an moe model')
     else:
         neox_args.iteration = 0
 
@@ -509,7 +536,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
     """Single training step."""
 
     # Pipeline parallelism schedules forward/backward/step
-    assert neox_args.is_pipe_parallel
+    assert not neox_args.is_pipe_parallel
     if neox_args.is_pipe_parallel:
         reduced_loss = train_step_pipe(
             neox_args=neox_args, timers=timers, model=model, data_iterator=data_iterator
@@ -529,7 +556,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
             timers("forward").stop()
             lm_losses.append(lm_loss)
             if moe_loss is not None:
-                total_loss += moe_loss
+                total_loss = lm_loss + moe_loss
                 moe_losses.append(moe_loss)
             else:
                 total_loss = lm_loss

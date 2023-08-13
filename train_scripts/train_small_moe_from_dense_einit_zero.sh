@@ -6,4 +6,4 @@ export LD_LIBRARY_PATH=/mnt/petrelfs/zengzhiyuan.d/miniconda3/envs/shared_llm/li
 export PATH=/mnt/petrelfs/zengzhiyuan.d/miniconda3/envs/shared_llm/bin:$PATH
 unset http_proxy; unset https_proxy; unset HTTP_PROXY; unset HTTPS_PROXY
 source ~/config_env.sh
-srun -p llm2 -N 1 --tasks-per-node 8 --gpus-per-task 1 python deepy.py train.py -d configs dense_small.yml local_setup.yml
+srun -p llm_exp -N 1 --tasks-per-node 6 --gpus-per-task 1 python deepy.py train.py -d configs small_moe_from_dense_einit_zero.yml local_setup.yml 

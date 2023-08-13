@@ -242,7 +242,7 @@ def load_checkpoint(
             load_lr_scheduler_states=load_optim_and_scheduler,
             tag=tag,
         )
-
+        assert checkpoint_name is not None, neox_args.load
         if checkpoint_name is None:
             # if an iteration is specified, we want to raise an error here rather than
             # continuing silently, since we are trying to load a specific checkpoint

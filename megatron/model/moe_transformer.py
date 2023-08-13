@@ -18,8 +18,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
             if 'bias' in name: # share bias paramters
                 setattr(param, 'allreduce', True)
                 delattr(param, 'group_name')
-        self.mlp_bias = self.mlp.dense_4h_to_h.bias
-        del self.mlp
+        self.adapter_gate_linear = torch.nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+        torch.nn.init.zeros_(self.adapter_gate_linear.weight)
 
     def forward(self, x, attention_mask, all_l_auxs=[], layer_past=None):
         layer_past = layer_past if layer_past is not None else self.layer_past
@@ -62,7 +62,7 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
             with torch.enable_grad():
                 output = bias_dropout_fn(
                     mlp_output,
-                    bias=self.mlp_bias.expand_as(mlp_output),
+                    bias=self.mlp.dense_4h_to_h.bias.expand_as(mlp_output),
                     residual=attention_output,
                     prob=self.hidden_dropout,
                 )
@@ -92,13 +92,25 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                 )
 
             # output = x + mlp(ln2(x))
-            mlp_output, l_aux, _ = self.moe_layer(
-                self.post_attention_layernorm(attention_output)
+            attention_output = self.post_attention_layernorm(attention_output)
+            expert_output, l_aux, _ = self.moe_layer(
+                attention_output
             )
+            adapter_gate = torch.nn.functional.tanh(self.adapter_gate_linear(attention_output))
+            
+            if self.mlp is not None and self.adapter_gate_linear is not None:
+                shared_expert_output, mlp_bias = self.mlp(
+                    attention_output
+                )
+                mlp_output = shared_expert_output + adapter_gate * expert_output
+            else:
+                mlp_output = expert_output
+                mlp_bias = self.mlp.dense_4h_to_h.bias
+
             with torch.enable_grad():
                 output = bias_dropout_fn(
                     mlp_output,
-                    bias=self.mlp_bias.expand_as(attention_output),
+                    bias=mlp_bias.expand_as(attention_output),
                     residual=attention_output,
                     prob=self.hidden_dropout,
                 )
