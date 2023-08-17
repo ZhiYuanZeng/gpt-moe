@@ -57,8 +57,7 @@ from megatron.utils import (
 from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
-from from_dense_to_moe import transform
-
+from from_dense_to_moe import transform, set_moe_args
 
 def pretrain(neox_args):
     """Main training program.
@@ -85,7 +84,7 @@ def pretrain(neox_args):
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
     model, optimizer, lr_scheduler = setup_model_and_optimizer(
-        neox_args=neox_args, use_cache=False, iteration=neox_args.load_iteration
+        neox_args=neox_args, use_cache=False
     )
     timers("model and optimizer").stop()
 
@@ -259,7 +258,8 @@ def get_model(neox_args, use_cache=False):
         topology=mpu.get_topology(),
         use_cache=use_cache,
     )
-    print_rank_0(model)
+    print_rank_0('finish building model')
+    # print_rank_0(model)
     ### soft prompt tuning stuff ###
     if neox_args.soft_prompt_tuning is not None and neox_args.soft_prompt_tuning.get(
         "enabled", False
@@ -462,6 +462,8 @@ def setup_optim(model, neox_args):
         else:
             _model_params = param_groups if optimizer is None else None
             _lr_scheduler = lr_scheduler
+        torch.distributed.barrier()
+        print(f'rank:{torch.distributed.get_rank()} deepspeed.initialize', flush=True)
 
         model, optimizer, _, lr_scheduler = deepspeed.initialize(
             model=model,
@@ -470,7 +472,6 @@ def setup_optim(model, neox_args):
             lr_scheduler=_lr_scheduler,
             dist_init_required=False,
             model_parameters=_model_params,
-            config_params=neox_args.deepspeed_config,
             mpu=mpu if not neox_args.is_pipe_parallel else None,
         )
         model.total_params = get_total_params(model.module)
@@ -483,10 +484,11 @@ def setup_optim(model, neox_args):
         raise ValueError("Must be using deepspeed to run neox")
     return model, optimizer, lr_scheduler
 
-def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
+def setup_model_and_optimizer(neox_args, use_cache=False):
     """Setup model and optimizer."""
+    if neox_args.load_iteration != 0 and neox_args.from_dense_to_moe:
+        neox_args = set_moe_args(neox_args)
     model = get_model(neox_args=neox_args, use_cache=use_cache)
-
     model, optimizer, lr_scheduler = setup_optim(model, neox_args) 
     if neox_args.load is not None:
         neox_args.iteration = load_checkpoint(
@@ -494,14 +496,15 @@ def setup_model_and_optimizer(neox_args, use_cache=False, iteration=None):
             model=model,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            iteration=iteration,
+            iteration=neox_args.load_iteration,
         )
+        assert neox_args.iteration != 0
         print_rank_0(
             f"Loading checkpoint and starting from iteration {neox_args.iteration}"
         )
         torch.distributed.barrier()
         # assert neox_args.from_dense_to_moe
-        if neox_args.from_dense_to_moe:
+        if neox_args.load_iteration ==0 and neox_args.from_dense_to_moe:
             moe_model = transform(model, neox_args, build_model_func=get_model)
             moe_model, moe_optimizer, moe_lr_scheduler = setup_optim(moe_model, neox_args)
             check_forward(model, moe_model)

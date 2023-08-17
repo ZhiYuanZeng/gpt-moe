@@ -72,7 +72,7 @@ def copy_expert_ffn(copy_from:nn.Module, copy_to:nn.Module, from_all=True):
     for i,layer in enumerate(moe_ffn_layers):
         if from_all:
             ffn_layer_idx = ffn_layers_of_current_rank[i % num_layers_each_rank]
-            print(f'{rank=}, {ffn_layers_of_current_rank=}, {ffn_layer_idx=}')
+            print(f'{rank=}, {ffn_layers_of_current_rank=}, {ffn_layer_idx=}', flush=True)
         else:
             ffn_layer_idx = i // num_layers_each_rank
             print(f'{rank=}, {ffn_layer_idx=}')
@@ -110,13 +110,9 @@ def transform(dense_model, dense_args, build_model_func):
     assert dense_args.moe_freq == 0 # it is a dense model
 
     print(f"#######################expert_initialization: {expert_initialization}#######################")
-    moe_args = dense_args # deepcopy fails, but changing the moe_freq will not change the structure and params of dense model
+    moe_args = dense_args # deepcopy fails
     if expert_initialization != "no":
-        moe_args.moe_freq = 2
-        moe_args.moe_num_experts = moe_args.num_layers // 2
-        moe_args.moe_top_k = 1
-        moe_args.ep_world_size = torch.distributed.get_world_size(group=None)
-    
+        moe_args = set_moe_args(moe_args)
     moe_model = build_model_func(moe_args)
     copy_shared_params(dense_model, moe_model)
 
@@ -125,8 +121,14 @@ def transform(dense_model, dense_args, build_model_func):
     elif expert_initialization == "from_dense_single_layer":
         copy_expert_ffn(dense_model, moe_model, from_all=False)
     elif expert_initialization == "zero":
-        zero_expert(moe_model)
-
-    print_rank_0(moe_model)
+        zero_expert(moe_model)    
     check_copied_params(moe_model)
     return moe_model
+
+def set_moe_args(args):
+    args.moe_freq = 2
+    args.moe_num_experts = args.num_layers // 2
+    args.moe_top_k = 1
+    args.ep_world_size = torch.distributed.get_world_size(group=None)
+    print_rank_0('changing the dense model setting to moe model setting by changing neo_args')
+    return args
