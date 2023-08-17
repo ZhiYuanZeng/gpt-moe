@@ -451,6 +451,7 @@ if __name__ == "__main__":
     main_args = neox_args.get_main_args()
     neox_args = NeoXArgs.consume_neox_args(main_args)
     neox_args.deepspeed_slurm=True
+    neox_args.deepspeed_config['stage']=0
     neox_args.configure_distributed_args()
     neox_args.build_tokenizer()
     neox_args.initialize_tensorboard_writer()
@@ -490,8 +491,8 @@ if __name__ == "__main__":
         neox_args=neox_args,
         iteration=0,
         model=model,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
+        optimizer=None,
+        lr_scheduler=None,
     )
     print(os.listdir(f'{tmp_cache_dir}'))
     ckpt_dir = os.path.join(tmp_cache_dir,'global_step0')
