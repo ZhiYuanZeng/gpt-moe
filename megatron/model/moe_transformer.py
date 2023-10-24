@@ -1,4 +1,5 @@
 from megatron.model.transformer import ParallelTransformerLayer, ParallelLinear
+from megatron.utils import print_rank_0
 import deepspeed
 import torch
 
@@ -19,6 +20,7 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                 setattr(param, 'allreduce', True)
                 delattr(param, 'group_name')
         self.adapter_gate_linear = torch.nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+        self.adapter_gate_activation = torch.nn.functional.silu
         torch.nn.init.zeros_(self.adapter_gate_linear.weight)
 
     def forward(self, x, attention_mask, all_l_auxs=[], layer_past=None):
@@ -58,11 +60,26 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                 )
 
             # mlp operator
-            mlp_output, l_aux, _ = self.moe_layer(x2)
+            # mlp_output, mlp_bias = self.mlp(x2)
+            # l_aux = 0
+            expert_output, l_aux, _ = self.moe_layer(x2)
+            adapter_gate = self.adapter_gate_activation(self.adapter_gate_linear(x2))
+            print_rank_0(f'gate value: {adapter_gate.mean()}')
+            if self.mlp is not None and self.adapter_gate_linear is not None:
+                shared_expert_output, mlp_bias = self.mlp(
+                    x2
+                )
+                expert_output = adapter_gate * expert_output
+                print_rank_0(f'{shared_expert_output.mean()=}, {expert_output.mean()=}')
+                mlp_output = shared_expert_output + expert_output
+            else:
+                mlp_output = expert_output
+                mlp_bias = self.mlp.dense_4h_to_h.bias
+
             with torch.enable_grad():
                 output = bias_dropout_fn(
                     mlp_output,
-                    bias=self.mlp.dense_4h_to_h.bias.expand_as(mlp_output),
+                    bias=mlp_bias.expand_as(mlp_output),
                     residual=attention_output,
                     prob=self.hidden_dropout,
                 )
@@ -96,8 +113,7 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
             expert_output, l_aux, _ = self.moe_layer(
                 attention_output
             )
-            adapter_gate = torch.nn.functional.tanh(self.adapter_gate_linear(attention_output))
-            
+            adapter_gate = self.adapter_gate_activation(self.adapter_gate_linear(attention_output))
             if self.mlp is not None and self.adapter_gate_linear is not None:
                 shared_expert_output, mlp_bias = self.mlp(
                     attention_output
