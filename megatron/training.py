@@ -486,7 +486,7 @@ def setup_optim(model, neox_args):
 
 def setup_model_and_optimizer(neox_args, use_cache=False):
     """Setup model and optimizer."""
-    if neox_args.load_iteration != 0 and neox_args.from_dense_to_moe:
+    if neox_args.load_iteration is not None and neox_args.load_iteration != 0 and neox_args.from_dense_to_moe:
         neox_args = set_moe_args(neox_args)
     model = get_model(neox_args=neox_args, use_cache=use_cache)
     model, optimizer, lr_scheduler = setup_optim(model, neox_args) 
@@ -498,13 +498,12 @@ def setup_model_and_optimizer(neox_args, use_cache=False):
             lr_scheduler=lr_scheduler,
             iteration=neox_args.load_iteration,
         )
-        assert neox_args.iteration != 0
         print_rank_0(
             f"Loading checkpoint and starting from iteration {neox_args.iteration}"
         )
         torch.distributed.barrier()
         # assert neox_args.from_dense_to_moe
-        if neox_args.load_iteration ==0 and neox_args.from_dense_to_moe:
+        if neox_args.load_iteration is None and neox_args.from_dense_to_moe:
             moe_model = transform(model, neox_args, build_model_func=get_model)
             moe_model, moe_optimizer, moe_lr_scheduler = setup_optim(moe_model, neox_args)
             check_forward(model, moe_model)
