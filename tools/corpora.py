@@ -122,7 +122,7 @@ class DataDownloader(ABC):
         os.makedirs(os.path.join(self.base_dir, self.name), exist_ok=True)
         for url in self.urls:
             os.system(
-                f"wget {url} -O {os.path.join(self.base_dir, self.name, os.path.basename(url))}"
+                f"wget {url} -O {os.path.join(self.base_dir, self.name, os.path.basename(url))} --no-check-certificate"
             )
 
     def tokenize(self):

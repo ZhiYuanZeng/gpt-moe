@@ -586,6 +586,7 @@ class NeoXArgs(*BASE_CLASSES):
             import subprocess
             master_addr = subprocess.check_output('scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1', shell=True)
             os.environ['MASTER_ADDR'] = master_addr.decode("utf8").strip()
+            print('launch with slurm...................')
 
         if 'LOCAL_RANK' in os.environ:
             self.update_value("local_rank", int(os.getenv("LOCAL_RANK", "0")))
@@ -1065,7 +1066,6 @@ class NeoXArgs(*BASE_CLASSES):
                     actual_type == int and field_def.type == float
                 ):  # floats should be able to be configured as ints
                     continue
-
                 # for typing.Literal (i.e a list of choices) - checks that actual value is in accepted values
                 elif field_def.type.__origin__ == Literal:
                     accepted_values = field_def.type.__args__
