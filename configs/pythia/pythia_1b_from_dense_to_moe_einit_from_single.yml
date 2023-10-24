@@ -27,7 +27,7 @@
   "optimizer": {
     "type": "Adam",
     "params": {
-      "lr": 0.00025,
+      "lr": 0.00005,
       "betas": [0.9, 0.95],
       "eps": 1.0e-8
     }
@@ -97,8 +97,9 @@
   "launcher": "slurm",
   "deepspeed_slurm": true,
   "load": "s3://zengzhiyuan.d/checkpoints/pythia-1b-from_dense_to_moe_einit_from_single/",
-  "load_iteration": 3000,
-  # "finetune": true,
+  # "load": "checkpoints/pythia-1b/",
+  "load_iteration": 2000,
+  "finetune": true,
   "from_dense_to_moe": true,
   "expert_initialization": "from_dense_single_layer",
   "save": "s3://zengzhiyuan.d/checkpoints/pythia-1b-from_dense_to_moe_einit_from_single/",

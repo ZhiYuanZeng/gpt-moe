@@ -27,7 +27,7 @@
   "optimizer": {
     "type": "Adam",
     "params": {
-      "lr": 0.00025,
+      "lr": 0.00005,
       "betas": [0.9, 0.95],
       "eps": 1.0e-8
     }
@@ -97,10 +97,12 @@
   "launcher": "slurm",
   "deepspeed_slurm": true,
   "load": "s3://zengzhiyuan.d/checkpoints/pythia-1b-from_dense_to_moe_einit_from_all/",
-  # "finetune": true,
+  # "load": "checkpoints/pythia-1b/",
+  "finetune": false,
   "from_dense_to_moe": true,
   "expert_initialization": "from_dense_all_layers",
   "save": "s3://zengzhiyuan.d/checkpoints/pythia-1b-from_dense_to_moe_einit_from_all/",
   "tensorboard-dir": "tensorboard/pythia/pythia_1b_moe_init_from_all/",
-  "load_iteration": 6000
+  # "tensorboard-dir": "/tmp",
+  "load_iteration": 2000
 }
