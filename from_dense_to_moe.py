@@ -1,11 +1,8 @@
-from megatron.model import GPT2ModelPipe
 from megatron.model.transformer import ParallelLinearPipe, ParallelSelfAttention, ParallelMLP, ParallelTransformerLayer
 from megatron.model.word_embeddings import EmbeddingPipe
-from megatron import mpu
 from megatron.model.norms import LayerNorm, RMSNorm, ScaleNorm
 from megatron.model.moe_transformer import MoEParallelTransformerLayer
 import torch.nn as nn
-from copy import deepcopy
 import torch
 import torch.distributed as dist
 from typing import List
@@ -78,6 +75,25 @@ def copy_expert_ffn(copy_from:nn.Module, copy_to:nn.Module, from_all=True):
             print(f'{rank=}, {ffn_layer_idx=}')
         copy_param([ffn_layers[ffn_layer_idx],], [layer,])
 
+def copy_expert_ffn_wt_dropout(copy_from:nn.Module, copy_to:nn.Module, random_mask_rate:float):
+    ffn_layers = [layer for layer in iterate_submodules(copy_from) if isinstance(layer, ParallelMLP)]
+    ffn_layers = [layer for i, layer in enumerate(ffn_layers) if i%2==1]
+    moe_ffn_layers = [layer.moe_layer.deepspeed_moe.experts for layer in iterate_submodules(copy_to) if isinstance(layer, MoEParallelTransformerLayer)]
+    assert len(moe_ffn_layers) % len(ffn_layers) == 0, f'{len(ffn_layers)=}, {len(moe_ffn_layers)=}'
+    num_layers_each_rank =len(moe_ffn_layers)//len(ffn_layers) # maybe num_local_experts > 1
+
+    world_size = dist.get_world_size(group=None)
+    assert world_size * num_layers_each_rank == len(ffn_layers), f'{world_size=}, {num_layers_each_rank=}, {len(ffn_layers)=}, {len(moe_ffn_layers)=}'
+    
+    for i,layer in enumerate(moe_ffn_layers):
+        ffn_layer_idx = i // num_layers_each_rank
+        src_param = ffn_layers[ffn_layer_idx]
+        mask = torch.rand(src_param.size()) > random_mask_rate
+        mask = mask.float()
+        copy_param([src_param*mask,], [layer,])
+
+def copy_expert_ffn_wt_pruning(copy_from:nn.Module, copy_to:nn.Module, ):
+    pass
 
 def copy_shared_params(copy_from:nn.Module, copy_to:nn.Module):
     copy_attention(copy_from, copy_to)
@@ -94,7 +110,7 @@ def check_copied_params(model):
             from_dense_params.append(n)
         else:
             random_initlized_params.append(n)
-    print_rank_0(f'{from_dense_params=}')
+    # print_rank_0(f'{from_dense_params=}')
     print_rank_0(f'{random_initlized_params=}')
     return from_dense_params, random_initlized_params
 
@@ -103,6 +119,7 @@ def zero_expert(model):
     for module in moe_ffn_layers:
         for p in module.parameters():
             nn.init.zeros_(p)
+
 
 def transform(dense_model, dense_args, build_model_func):
     expert_initialization = dense_args.expert_initialization
@@ -116,10 +133,12 @@ def transform(dense_model, dense_args, build_model_func):
     moe_model = build_model_func(moe_args)
     copy_shared_params(dense_model, moe_model)
 
-    if expert_initialization == 'from_dense_all_layers':
+    if expert_initialization == 'copy_multiple':
         copy_expert_ffn(dense_model, moe_model, from_all=True)
-    elif expert_initialization == "from_dense_single_layer":
+    elif expert_initialization == "copy":
         copy_expert_ffn(dense_model, moe_model, from_all=False)
+    elif expert_initialization == "copy_and_mask":
+        copy_expert_ffn_wt_dropout(dense_model, moe_model, from_all=False)   
     elif expert_initialization == "zero":
         zero_expert(moe_model)    
     check_copied_params(moe_model)

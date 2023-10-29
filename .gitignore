@@ -151,3 +151,6 @@ logs/
 tensorboard/
 src/
 data/
+hf_models/
+checkpoints/
+compress_llama_7b/

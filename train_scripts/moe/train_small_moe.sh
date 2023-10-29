@@ -7,4 +7,4 @@ export PATH=/mnt/petrelfs/zengzhiyuan.d/miniconda3/envs/shared_llm/bin:$PATH
 unset http_proxy; unset https_proxy; unset HTTP_PROXY; unset HTTPS_PROXY
 source ~/config_env.sh
 
-srun -p llm2 -N 2 --tasks-per-node 8 --gpus-per-task 1 python deepy.py train.py -d configs moe_small.yml local_setup.yml
+srun -p llm_t -N 2 --tasks-per-node 8 --gpus-per-task 1 python deepy.py train.py -d configs moe_small.yml local_setup.yml
