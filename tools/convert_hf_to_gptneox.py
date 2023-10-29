@@ -477,7 +477,7 @@ if __name__ == "__main__":
         lr_scheduler=lr_scheduler,
         dist_init_required=False,
         model_parameters=None,
-        config_params=neox_args.deepspeed_config,
+        # config_params=neox_args.deepspeed_config,
         mpu=mpu if not neox_args.is_pipe_parallel else None,
     )
 
