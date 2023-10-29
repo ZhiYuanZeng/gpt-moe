@@ -148,7 +148,7 @@ def _initialize_distributed(neox_args):
                 neox_args.local_rank = device
             torch.cuda.set_device(device)
 
-        distributed.init_distributed(
+        deepspeed.init_distributed(
             dist_backend=neox_args.distributed_backend,
             auto_mpi_discovery=True,
             distributed_port=os.getenv("MASTER_PORT", "6000"),

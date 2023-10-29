@@ -21,6 +21,7 @@ import torch
 from megatron.model.norms import LayerNorm, RMSNorm, ScaleNorm
 from megatron.model.fused_softmax import SoftmaxFusionTypes
 from types import GeneratorType
+import torch.distributed as dist
 
 
 def get_params_for_weight_decay_optimization(module, neox_args):
@@ -96,6 +97,7 @@ class SequentialWrapper(torch.nn.Module):
         self.activation_checkpoint_interval = activation_checkpoint_interval
         self.parent_class_name = parent_class_name
         self.activation_checkpoint_func = activation_checkpoint_func
+        self.batch_fn = None
 
     def _is_checkpointable(self, funcs):
         if self.parent_class_name == "GPT2ModelPipe":
@@ -105,6 +107,14 @@ class SequentialWrapper(torch.nn.Module):
         params = [f.parameters() for f in funcs if isinstance(f, torch.nn.Module)]
         return any(len(list(p)) > 0 for p in params)
 
+    def set_batch_fn(self, fn):
+        """Execute a post-processing function on input data.
+
+        Args:
+            fn (function): The function to run.
+        """
+        self.batch_fn = fn
+
     def inference_mode(self, use_cache=True):
         """
         Sets up the model for inference by turning on k/v caching (if specified) and setting `parallel output` of the final layer to false,
@@ -113,14 +123,45 @@ class SequentialWrapper(torch.nn.Module):
         :param cache: (bool) True if you want to use caching during inference, False otherwise
         """
         _set_use_cache(self.sequential, use_cache)
+        recursive_setattr(self.sequential, "training", False)
 
     def train_mode(self):
         """
         Sets up the model for training by turning off k/v caching.
         """
         _set_use_cache(self.sequential, False)
+        recursive_setattr(self.sequential, "training", True)
 
-    def forward(self, forward_input):
+    def forward(
+        self, forward_input, curriculum_seqlen=None, labels=None, neox_args=None
+    ):
+
+        if self.batch_fn:
+            forward_input = self.batch_fn(forward_input)
+
+        if (
+            curriculum_seqlen is not None
+            and isinstance(forward_input, tuple)
+            and len(forward_input) == 3
+        ):
+            neox_args.update_value("curriculum_seqlen", curriculum_seqlen)
+            tokens = forward_input[0]
+            input_ids = forward_input[1]
+            attention_mask = forward_input[2]
+            if curriculum_seqlen < input_ids.size()[1]:
+                # seqlen-based curriculum learning
+                # input_ids, position_ids, labels have size [batch size, seqlen]
+                input_ids = input_ids[:, :curriculum_seqlen].contiguous()
+                tokens = tokens[:, :curriculum_seqlen].contiguous()
+                # position_ids = position_ids[:, :curriculum_seqlen].contiguous()
+                if labels is not None:
+                    labels = labels[:, :curriculum_seqlen].contiguous()
+                # attention_mask has size [1, 1, seqlen, seqlen]
+                attention_mask = attention_mask[
+                    :, :, :curriculum_seqlen, :curriculum_seqlen
+                ].contiguous()
+            forward_input = (tokens, input_ids, attention_mask)
+
         def exec_range_func(start, end):
             """Helper function to be used with checkpoint()
             Adapted from torch.utils.checkpoint:checkpoint_sequential()
@@ -160,6 +201,12 @@ class SequentialWrapper(torch.nn.Module):
                 else:
                     x = exec_range_func(start_idx, end_idx)(*x)
         return x
+
+    def clear_cache(self):
+        """
+        Recursively clears the kv cache on all layers
+        """
+        recursive_setattr(self.sequential, "layer_past", None)
 
 
 def recursive_setattr(m, attr, value, assert_type=None, type_filter=None):

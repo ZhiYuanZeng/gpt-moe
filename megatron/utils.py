@@ -24,16 +24,20 @@ import socket
 from typing import Dict, List
 
 import requests
-import wandb
-from wandb import UsageError
+
+try:
+    import wandb
+except ModuleNotFoundError:
+    pass
 
 import torch
 
 from deepspeed.launcher.runner import fetch_hostfile, parse_inclusion_exclusion
+from deepspeed.runtime.bf16_optimizer import BF16_Optimizer
 
 from megatron import print_rank_0
 from megatron import mpu
-from deepspeed import PipelineEngine, DeepSpeedEngine
+
 from collections import deque
 
 
@@ -167,7 +171,7 @@ def init_wandb(neox_args):
                 force=False,
                 entity=neox_args.wandb_team,
             )
-        except UsageError as e:
+        except wandb.UsageError as e:
             neox_args.update_value("use_wandb", False)
             print(e)
             print(
@@ -346,8 +350,11 @@ class OverflowMonitor:
         self.optimizer = optimizer
         self.n = n
         self.history = deque(maxlen=n)
+        self.bf16 = isinstance(optimizer, BF16_Optimizer)
 
     def check(self, skipped):
+        if self.bf16:
+            return
         self.history.append(skipped)
         if (
             self.optimizer.overflow
@@ -419,6 +426,7 @@ def setup_for_inference_or_eval(
         "checkpoint_activations": False,
         "partition_activations": False,
         "no_load_optim": True,
+        "optimizer": None,  # prevent loading optimizer (no_load_optim alone won't work)
         "zero_optimization": None,  # disable zero optimization (won't be used in inference, and loading zero optimizer can cause errors)
     }
     if overwrite_values:

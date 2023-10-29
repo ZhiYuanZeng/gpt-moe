@@ -13,8 +13,14 @@
 # limitations under the License.
 
 import sys
+
 import torch
-import wandb
+
+try:
+    import wandb
+except ModuleNotFoundError:
+    pass
+
 from megatron import mpu, print_rank_0
 from megatron.utils import report_memory
 
@@ -22,7 +28,7 @@ from megatron.utils import report_memory
 class Tee:
     """Duplicate output to both stdout/err and file"""
 
-    def __init__(self, file, err=False):
+    def __init__(self, file, err: bool = False) -> None:
         self.file = open(file, "w")
         self.err = err
         if not err:
@@ -32,14 +38,14 @@ class Tee:
             self.std = sys.stderr
             sys.stderr = self
 
-    def __del__(self):
+    def __del__(self) -> None:
         if not self.err:
             sys.stdout = self.std
         else:
             sys.stderr = self.std
         self.file.close()
 
-    def write(self, data):
+    def write(self, data) -> None:
         try:
             self.file.write(data)
         except OSError:
@@ -49,14 +55,14 @@ class Tee:
         except OSError:
             pass
 
-    def flush(self):
+    def flush(self) -> None:
         try:
             self.file.flush()
         except OSError:
             pass
 
 
-def human_readable_flops(num):
+def human_readable_flops(num) -> str:
     for unit in [
         "",
         "KFLOPS",
@@ -73,17 +79,31 @@ def human_readable_flops(num):
     return "%.1f%s" % (num, "Yi")
 
 
-def get_flops(neox_args, model, iter_time_s):
+def get_flops(neox_args, iter_time_s) -> float:
+    """
+    Use FLOPS calculation from Megatron-DeepSpeed:
+    https://github.com/microsoft/Megatron-DeepSpeed/blob/cc3a94c636789f74be2bc6cfc62a3d723fd5d749/megatron/utils.py#L253
+    They get it from https://arxiv.org/pdf/2104.04473.pdf
+    """
     world_size = torch.distributed.get_world_size()
-    ff = model.total_params * 6
-    attn = neox_args.seq_length * neox_args.hidden_size * neox_args.num_layers * 60
-    flops = (
-        neox_args.train_batch_size
-        * neox_args.seq_length
-        * (ff + attn)
-        / (iter_time_s * world_size)
+    vocab_size = neox_args.padded_vocab_size
+    batch_size = neox_args.train_batch_size
+    seq_len = neox_args.seq_length
+    hidden_size = neox_args.hidden_size
+    num_layers = neox_args.num_layers
+    ckpt_activations_factor = 4 if neox_args.checkpoint_activations else 3
+    flops_calc1 = (
+        24
+        * ckpt_activations_factor
+        * batch_size
+        * seq_len
+        * num_layers
+        * (hidden_size**2)
+        * (1.0 + (seq_len / (6.0 * hidden_size)))
     )
-    return flops
+    flops_calc2 = vocab_size / (16.0 * num_layers * hidden_size)
+    flops_per_iteration = flops_calc1 + flops_calc2
+    return flops_per_iteration / (iter_time_s * world_size)
 
 
 def training_log(
@@ -297,10 +317,19 @@ def training_log(
             1, neox_args.log_interval - total_loss_dict[skipped_iters_key]
         )
 
+        # log curriculum learning
+        if neox_args.curriculum_learning:
+            tb_wandb_log(
+                "curriculum_seqlen",
+                neox_args.curriculum_seqlen,
+                iteration,
+                use_wandb=neox_args.use_wandb,
+                tensorboard_writer=neox_args.tensorboard_writer,
+            )
+
         # log tflop / gpu
-        flops_per_s_per_gpu = get_flops(
-            neox_args=neox_args, model=model, iter_time_s=iteration_time
-        )
+        flops_per_s_per_gpu = get_flops(neox_args, iteration_time)
+
         log_string += (
             f" approx flops per GPU: {human_readable_flops(flops_per_s_per_gpu)} |"
         )
@@ -343,7 +372,12 @@ def training_log(
 
 
 def tb_wandb_log(
-    key, value, iteration_no, use_wandb, tensorboard_writer=None, all_ranks=False
+    key: str,
+    value: float,
+    iteration_no: int,
+    use_wandb: bool,
+    tensorboard_writer=None,
+    all_ranks: bool = False,
 ):
     # logs to both tb and wandb (if present) from the zeroth rank
     do_log = torch.distributed.get_rank() == 0 or all_ranks

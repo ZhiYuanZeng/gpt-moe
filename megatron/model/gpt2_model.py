@@ -46,7 +46,11 @@ from typing import Union, List
 
 
 def gpt2_attention_mask_func(attention_scores, ltor_mask):
-    attention_scores.masked_fill_(ltor_mask, -10000.0)
+    mask_value = torch.finfo(attention_scores.dtype).min
+    # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
+    # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
+    mask_value = torch.tensor(mask_value, dtype=attention_scores.dtype, device=attention_scores.device)
+    attention_scores.masked_fill_(ltor_mask, mask_value)
     return attention_scores
 
 def _pre_transformer_block(args):
@@ -294,6 +298,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                     neox_args=self.neox_args,
                     init_method=self.init_method,
                     parallel_output=self.parallel_output,
+                    is_last_layer=True,
                 )
             )
 
@@ -314,6 +319,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         recursive_setattr(self.forward_funcs, "use_cache", use_cache, assert_type=bool)
         # then set parallel output of the final layer to false so we don't have to gather the output manually
         self._set_parallel_output(False)
+        recursive_setattr(self.forward_funcs, "training", False)
 
     def train_mode(self):
         """
@@ -324,6 +330,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         recursive_setattr(self.forward_funcs, "use_cache", False)
         # then set parallel output to true (more efficient training)
         self._set_parallel_output(True)
+        recursive_setattr(self.forward_funcs, "training", True)
 
     def clear_cache(self):
         """

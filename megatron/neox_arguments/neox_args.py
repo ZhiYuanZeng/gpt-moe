@@ -21,9 +21,10 @@ except ImportError:
     from template import NeoXArgsTemplate
 
 try:
-    from typing import Literal
+    from typing import List, Literal, Union
 except ImportError:
-    from typing_extensions import Literal
+    from typing_extensions import List, Literal, Union
+
 
 ATTENTION_TYPE_CHOICES = [
     "global",
@@ -227,9 +228,11 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Pad the vocab size to be divisible by this value. This is added for computational efficiency reasons.
     """
 
-    activation: Literal["gelu", "geglu", "relu", "softsign", "swish", "mish"] = "gelu"
+    activation: Literal[
+        "gelu", "geglu", "relu", "softsign", "swish", "mish", "silu"
+    ] = "gelu"
     """
-    Activation function to use - choose from ["gelu", "geglu", "relu", "softsign", "swish", "mish"]
+    Activation function to use - choose from ["gelu", "geglu", "relu", "softsign", "swish", "mish", "silu"]
     """
 
     scaled_upper_triang_masked_softmax_fusion: bool = False
@@ -342,6 +345,22 @@ class NeoXArgsModel(NeoXArgsTemplate):
       x = x + attn(y) + mlp(y)
     """
 
+    use_bias_in_norms: bool = True
+    """
+    If false, norms (e.g. LayerNorm) will not have bias terms
+    """
+    use_bias_in_attn_linear: bool = True
+    """
+    If false, attn_linear (e.g. QKVO) will not have bias terms
+    """
+
+    mlp_type: str = "regular"
+    """
+    Types:
+        regular: Megatron implementation
+        llama: LLaMA MLP (SiLU-gated MLP)
+    """
+
     soft_prompt_tuning: dict = None
     """
     Dictionary configuring the soft prompt tuning parameters.
@@ -353,7 +372,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
         'init_range': float = 0.5 # if no init string is provided, initialize the soft prompt with a uniform distribution between -init_range and init_rang
     """
 
-    output_layer_parallelism: Literal["row", "column"] = "row"
+    # Output layer parallelism over the hidden dim is currently broken (https://github.com/EleutherAI/gpt-neox/issues/905)
+    output_layer_parallelism: Literal["column"] = "column"
 
     """
     Parameter controlling whether the output layer is parallelized over the hidden dim (row) or the vocab dim (column)
@@ -385,10 +405,11 @@ class NeoXArgsOptimizer(NeoXArgsTemplate):
     """
 
     optimizer_type: Literal[
-        "adam", "onebitadam", "cpu_adam", "cpu_torch_adam", "sm3", "madgrad_wd"
+        "adam", "onebitadam", "cpu_adam", "cpu_torch_adam", "sm3", "madgrad_wd", "sgd", "lion"
     ] = "adam"
     """
-    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd]
+    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd', 'sgd']
+    NOTE: sgd will use MuSGD from Mup. Mup must be enabled for this optimizer.
     """
 
     use_bnb_optimizer: bool = False
@@ -396,7 +417,7 @@ class NeoXArgsOptimizer(NeoXArgsTemplate):
     Whether to enable the bitsandbytes optimizers
     """
 
-    zero_stage: int = None
+    zero_stage: Union[int, List[int], Literal["all"]] = None
     """
     Zero Optimizer stage
     """
@@ -506,7 +527,7 @@ class NeoXArgsLogging(NeoXArgsTemplate):
     Write TensorBoard logs to this directory.
     """
 
-    log_interval: int = None
+    log_interval: int = 100
     """
     Interval between logging.
     """
@@ -716,6 +737,11 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     List of paths to train datasets.
     """
 
+    label_data_paths: list = None
+    """
+    List of paths to label datasets (not shifted by 1 yet!).
+    """
+
     test_data_paths: list = None
     """
     List of paths to test datasets.
@@ -770,9 +796,9 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     as alpha -> inf, the probability of sampling from the groups with *the most samples* -> 1
     """
 
-    data_impl: str = "infer"
+    data_impl: Literal["infer", "mmap", "cached"] = "infer"
     """
-    Implementation of indexed datasets.
+    Implementation of indexed datasets, can be one of "infer", "cached", or "mmap"
     """
 
     mmap_warmup: bool = False
@@ -784,6 +810,16 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     """
     Output directory to save checkpoints to.
     """
+
+    s3_path: str = None
+    """
+    Path to s3 bucket for saving checkpoints.
+    """
+
+    s3_chunk_size: int = 104_857_600
+    """
+    The number of bytes in each file chunk when uploading to s3. Defaults to 100MiB.
+    """ 
 
     config_files: dict = None
     """
@@ -998,6 +1034,57 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     char_level_ppl: bool = False
     """
     Whether to calculate character level perplexity as well as token level perplexity. (may incur a time cost)
+    """
+
+    use_mup: bool = False
+    """
+    Whether to use Microsoft's Mup https://github.com/microsoft/mup
+    """
+
+    coord_check: bool = False
+    """
+    Whether to generate a "coord check" plot to verify mup's implementation in neox
+    """
+
+    save_base_shapes: bool = False
+    """
+    Whether to save base shapes for mup. This will save the shapes to the path specified in base-shapes-file.
+    """
+
+    base_shapes_file: str = None
+    """
+    Path to the base shapes to save to/load from
+    """
+
+    mup_init_scale: float = 1.0
+    """
+    Initialization scale: All the parameters are multiplied by this value
+    """
+
+    mup_attn_temp: float = 1.0
+    """
+    Attention temperature: Reciprocal of the multiplier applied to the input to attention softmax
+    """
+
+    mup_output_temp: float = 1.0
+    """
+    Output temperature: Reciprocal of the multiplier applied to the input to softmax that
+    produces the distribution over output tokens.
+    """
+
+    mup_embedding_mult: float = 1.0
+    """
+    Scalar by which we multiply the output of the embedding layer
+    """
+
+    mup_rp_embedding_mult: float = 1.0
+    """
+    Scalar by which we multiply vectors representing relative position
+    """
+
+    mup_width_scale: int = 2
+    """
+    What to scale width by when creating the delta model for mup
     """
 
 

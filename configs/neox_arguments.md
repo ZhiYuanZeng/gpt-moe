@@ -111,7 +111,7 @@ Logging Arguments
 
 - **git_hash**: str
 
-    Default = 5face7a
+    Default = a97bd1f
 
     current git hash of repository
 
@@ -135,7 +135,7 @@ Logging Arguments
 
 - **log_interval**: int
 
-    Default = None
+    Default = 100
 
     Interval between logging.
 
@@ -399,11 +399,11 @@ Model Arguments
 
 
 
-- **activation**: typing.Literal['gelu', 'geglu', 'relu', 'softsign', 'swish', 'mish']
+- **activation**: typing.Literal['gelu', 'geglu', 'relu', 'softsign', 'swish', 'mish', 'silu']
 
     Default = gelu
 
-    Activation function to use - choose from ["gelu", "geglu", "relu", "softsign", "swish", "mish"]
+    Activation function to use - choose from ["gelu", "geglu", "relu", "softsign", "swish", "mish", "silu"]
 
 
 
@@ -547,6 +547,32 @@ Model Arguments
 
 
 
+- **use_bias_in_norms**: bool
+
+    Default = True
+
+    If false, norms (e.g. LayerNorm) will not have bias terms
+
+
+
+- **use_bias_in_attn_linear**: bool
+
+    Default = True
+
+    If false, attn_linear (e.g. QKVO) will not have bias terms
+
+
+
+- **mlp_type**: str
+
+    Default = regular
+
+    Types:
+        regular: Megatron implementation
+        llama: LLaMA MLP (SiLU-gated MLP)
+
+
+
 - **soft_prompt_tuning**: dict
 
     Default = None
@@ -561,9 +587,9 @@ Model Arguments
 
 
 
-- **output_layer_parallelism**: typing.Literal['row', 'column']
+- **output_layer_parallelism**: typing.Literal['column']
 
-    Default = row
+    Default = column
 
     Parameter controlling whether the output layer is parallelized over the hidden dim (row) or the vocab dim (column)
 
@@ -575,11 +601,12 @@ Optimizer Arguments
 
 
 
-- **optimizer_type**: typing.Literal['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd']
+- **optimizer_type**: typing.Literal['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd', 'sgd', 'lion']
 
     Default = adam
 
-    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd]
+    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd', 'sgd', 'lion']
+    NOTE: sgd will use MuSGD from Mup. Mup must be enabled for this optimizer.
 
 
 
@@ -591,7 +618,7 @@ Optimizer Arguments
 
 
 
-- **zero_stage**: int
+- **zero_stage**: typing.Union[int, typing.List[int], typing.Literal['all']]
 
     Default = None
 
@@ -1035,6 +1062,14 @@ Training Arguments
 
 
 
+- **label_data_paths**: list
+
+    Default = None
+
+    List of paths to label datasets (not shifted by 1 yet!).
+
+
+
 - **test_data_paths**: list
 
     Default = None
@@ -1110,11 +1145,11 @@ Training Arguments
 
 
 
-- **data_impl**: str
+- **data_impl**: typing.Literal['infer', 'mmap', 'cached']
 
     Default = infer
 
-    Implementation of indexed datasets.
+    Implementation of indexed datasets, can be one of "infer", "cached", or "mmap"
 
 
 
@@ -1131,6 +1166,22 @@ Training Arguments
     Default = None
 
     Output directory to save checkpoints to.
+
+
+
+- **s3_path**: str
+
+    Default = None
+
+    Path to s3 bucket for saving checkpoints.
+
+
+
+- **s3_chunk_size**: int
+
+    Default = 104857600
+
+    The number of bytes in each file chunk when uploading to s3. Defaults to 100MiB.
 
 
 
@@ -1466,11 +1517,92 @@ Training Arguments
 
 
 
+- **use_mup**: bool
+
+    Default = False
+
+    Whether to use Microsoft's Mup https://github.com/microsoft/mup
+
+
+
+- **coord_check**: bool
+
+    Default = False
+
+    Whether to generate a "coord check" plot to verify mup's implementation in neox
+
+
+
+- **save_base_shapes**: bool
+
+    Default = False
+
+    Whether to save base shapes for mup. This will save the shapes to the path specified in base-shapes-file.
+
+
+
+- **base_shapes_file**: str
+
+    Default = None
+
+    Path to the base shapes to save to/load from
+
+
+
+- **mup_init_scale**: float
+
+    Default = 1.0
+
+    Initialization scale: All the parameters are multiplied by this value
+
+
+
+- **mup_attn_temp**: float
+
+    Default = 1.0
+
+    Attention temperature: Reciprocal of the multiplier applied to the input to attention softmax
+
+
+
+- **mup_output_temp**: float
+
+    Default = 1.0
+
+    Output temperature: Reciprocal of the multiplier applied to the input to softmax that
+    produces the distribution over output tokens.
+
+
+
+- **mup_embedding_mult**: float
+
+    Default = 1.0
+
+    Scalar by which we multiply the output of the embedding layer
+
+
+
+- **mup_rp_embedding_mult**: float
+
+    Default = 1.0
+
+    Scalar by which we multiply vectors representing relative position
+
+
+
+- **mup_width_scale**: int
+
+    Default = 2
+
+    What to scale width by when creating the delta model for mup
+
+
+
 ## NeoXArgsDeepspeedConfig
 
 Args for deepspeed config
     Every argument included here will be included in deepspeed config json
-    #TODO this list is not complete as compared to https://www.deepspeed.ai/docs/config-json/
+    As of Mar 8 2023, up to date compared to https://www.deepspeed.ai/docs/config-json/
 
 
 
@@ -1568,11 +1700,23 @@ Args for deepspeed config
 
     Configuration for using mixed precision/FP16 training that leverages NVIDIA’s Apex package.
 
+    Dictionary options as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#fp16-training-options
+
+
+
+- **bf16**: dict
+
+    Default = None
+
+    Configuration for using bfloat16 floating-point format as an alternative to FP16. BFLOAT16 requires hardware support (e.g., NVIDIA A100). Dictionary options as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#bfloat16-training-options
+
 
 
 - **amp**: dict
 
     Default = None
+
+    Configuration for using automatic mixed precision (AMP) training that leverages NVIDIA’s Apex AMP package.
 
     Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#automatic-mixed-precision-amp-training-options
 
@@ -1580,7 +1724,7 @@ Args for deepspeed config
 
 - **gradient_clipping**: float
 
-    Default = 0.0
+    Default = 1.0
 
     Enable gradient clipping with provided value
 
@@ -1590,7 +1734,25 @@ Args for deepspeed config
 
     Default = None
 
+    Configuration for using ZeRO optimization.
+
+    Multi-level dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#zero-optimization-options
+
+
+
+- **curriculum_learning**: dict
+
+    Default = None
+
     
+
+
+
+- **curriculum_seqlen**: int
+
+    Default = 0
+
+    Internal var for tracking the current seqlen
 
 
 
@@ -1622,15 +1784,141 @@ Args for deepspeed config
 
     Default = None
 
+    Configuration for using FLOPS profiler.
+
     Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#flops-profiler
 
 
 
-- **zero_allow_untested_optimizer**: bool
+- **communication_data_type**: bool
 
-    Default = False
+    Default = None
 
-    Whether Deepspeed Zero Optimizer will allow an optimizer that hasn't been tested by the deepspeed team
+    During gradient averaging, perform communication with selected data type. By default it will be determined by selected regime
+
+
+
+- **autotuning**: dict
+
+    Default = None
+
+    Configuration for using autotuning.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#autotuning
+
+
+
+- **activation_checkpointing**: dict
+
+    Default = None
+
+    Configuration for using activation checkpointing.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#activation-checkpointing
+
+
+
+- **sparse_attention**: dict
+
+    Default = None
+
+    Configuration for using sparse attention.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#sparse-attention
+
+
+
+- **data_efficiency**: dict
+
+    Default = None
+
+    Configuration for using data efficiency.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#data-efficiency
+
+
+
+- **tensorboard**: dict
+
+    Default = None
+
+    Configuration for using tensorboard.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#monitoring-module-tensorboard-wandb-csv
+
+
+
+- **wandb**: dict
+
+    Default = None
+
+    Configuration for using wandb.
+
+
+
+- **csv_monitor**: dict
+
+    Default = None
+
+    Configuration for using csv_monitor.
+
+
+
+- **elasticity**: dict
+
+    Default = None
+
+    Configuration for using elastic training.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#elastic-training-config-v01-and-v02
+
+
+
+- **comms_logger**: dict
+
+    Default = None
+
+    Configuration for using communication logger.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#communication-logging
+
+
+
+- **compression_training**: dict
+
+    Default = None
+
+    Configuration for using compression training.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#compression
+
+
+
+- **checkpoint**: dict
+
+    Default = None
+
+    Configuration for using checkpointing.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#checkpoint-options
+
+
+
+- **data_types**: dict
+
+    Default = None
+
+    Configuration for using data types.
+
+    Dictionary as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#data-type-options
+
+
+
+- **deepspeed_extra_args**: dict
+
+    Default = None
+
+    Dictionary of extra arguments to be included in the yaml config file. This can be used for any argument not included in the above list.
 
 
 
@@ -1703,11 +1991,19 @@ Args for deepspeed runner (deepspeed.launcher.runner).
 
 
 
-- **launcher**: str
+- **launcher**: typing.Literal['pdsh', 'openmpi', 'mvapich', 'slurm']
 
     Default = pdsh
 
     Launcher backend for multi-node training. Options currently include PDSH, OpenMPI, MVAPICH.
+
+
+
+- **force_multi**: bool
+
+    Default = False
+
+    Force multi-node training even if only one node is specified.
 
 
 
@@ -1716,6 +2012,22 @@ Args for deepspeed runner (deepspeed.launcher.runner).
     Default = False
 
     If true, autodetects nvlink pairs and remaps cuda visible devices to place them next to each other. This is an Eleuther addition to deepspeed, and should speed up model parallel training on setups with nvlink pairs when mp=2.
+
+
+
+- **autotuning_run**: str
+
+    Default = None
+
+    Either "tune", "run", or `None`.
+
+
+
+- **no_ssh_check**: bool
+
+    Default = False
+
+    If true, overrides the default check where DeepSpeed confirms that the headnode is accessible via ssh.
 
 
 
