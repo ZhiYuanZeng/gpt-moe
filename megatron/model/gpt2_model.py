@@ -70,9 +70,9 @@ def _post_transformer_block(args):
 def _post_moe_transformer_block(args):
     # from (hidden_states, attention_mask, l_auxs)
     # to (hidden_states.T)
-    assert len(args) == 3, "Incorrect number of arguments to _post_moe_transformer_block"
+    assert len(args) > 2, "Incorrect number of arguments to _post_moe_transformer_block"
     fn = lambda _args: (_args[0].transpose(0, 1).contiguous())
-    return fn(args), args[-1]
+    return fn(args), *args[2:]
 
 
 class GPT2ModelPipe(PipelineModule, torch.nn.Module):

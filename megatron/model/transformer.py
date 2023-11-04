@@ -39,6 +39,7 @@ from megatron.model.fused_bias_dropout import (
     bias_dropout_add_fused_inference,
 )
 from megatron.model.utils import configure_sparse_attention
+from megatron import print_rank_0
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -711,7 +712,6 @@ class ParallelSelfAttention(nn.Module):
         # =================
 
         output, bias = self.dense(context_layer)
-
         if self.use_cache:
             output = [output, present]
 

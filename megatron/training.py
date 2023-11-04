@@ -37,7 +37,7 @@ from megatron.utils import (
     reduce_losses,
 )
 
-from megatron import print_rank_0, mpu
+from megatron import print_rank_0, mpu, print_rank
 from megatron.model import (
     GPT2ModelPipe,
     SoftEmbedding,
@@ -58,7 +58,8 @@ from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
 from from_dense_to_moe import transform, set_moe_args
-
+import math
+import functools
 
 def mup_weights_reinit(neox_args, model):
     def has_method(o, name):
@@ -192,7 +193,7 @@ def pretrain(neox_args):
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
     model, optimizer, lr_scheduler = setup_model_and_optimizer(
-        neox_args=neox_args, use_cache=False, iteration=neox_args.iteration
+        neox_args=neox_args, use_cache=False
     )
     timers("model and optimizer").stop()
 
@@ -362,6 +363,25 @@ def get_batch_sequential(forward_input, neox_args):
     )
     return (forward_input[0], forward_input[1], attention_mask)
 
+def _merge_and_average_dicts(list_of_dicts):
+    merged_dict = {}
+
+    # Iterate over each dictionary in the list
+    for data_dict in list_of_dicts:
+        for key, value in data_dict.items():
+            # If the key is not in the merged_dict, initialize it with the value
+            if key not in merged_dict:
+                merged_dict[key] = value
+            else:
+                # If the key is already in the merged_dict, add the value to the existing total
+                merged_dict[key] += value
+
+    # Calculate the average by dividing the total values by the number of dictionaries
+    num_dicts = len(list_of_dicts)
+    for key in merged_dict:
+        merged_dict[key] /= num_dicts
+
+    return merged_dict
 
 def forward_step(
     data_iterator, model, neox_args, timers, return_logits=False, is_train=False
@@ -381,6 +401,7 @@ def forward_step(
         timers("batch generator").stop()
 
     outputs = model((tokens, position_ids, attention_mask), neox_args=neox_args)
+    exit()
     if (
         is_train
         and neox_args.curriculum_learning
@@ -389,17 +410,19 @@ def forward_step(
         loss_mask = loss_mask[:, : neox_args.curriculum_seqlen].contiguous()
         labels = labels[:, : neox_args.curriculum_seqlen].contiguous()
     if isinstance(outputs, tuple):
-        lm_outputs, l_auxs = outputs[0], outputs[1]
-        l_aux = sum(l_auxs) * neox_args.moe_loss_weight
+        lm_outputs, l_auxs, metadatas = outputs[0], outputs[1], outputs[2]
+        l_aux = torch.sum(l_auxs) * neox_args.moe_loss_weight
+        moe_metadata = _merge_and_average_dicts(metadatas)
     else:
         lm_outputs = outputs
         l_aux = None
+        moe_metadata = None
     lm_loss = cross_entropy(
         lm_outputs, (labels, loss_mask), _fp16=neox_args.fp16_lm_cross_entropy
     )
     if return_logits:
         return lm_loss, l_aux, lm_outputs
-    return lm_loss, l_aux
+    return lm_loss, l_aux, moe_metadata
 
 
 def get_model(neox_args, use_cache=False):
@@ -463,6 +486,17 @@ def get_model(neox_args, use_cache=False):
 
         # Call the mup replacement init functions on the model now that set_base_shapes has given each weight a .infshape attribute
         mup_weights_reinit(neox_args, model)
+
+    if getattr(neox_args, "moe_normalize_expert_grad", "world_size") == "sqrt_world_size":
+        expert_normalization_term = math.sqrt(neox_args.moe_num_experts)
+    else:
+        expert_normalization_term = neox_args.moe_num_experts
+    for n,p in model.named_parameters():
+        if not getattr(p, 'all_reduce', True):
+            print_rank_0(n)
+            # Scale grads by world_size/pg_size so that grads match the equivalent replicated
+            # world size expected within Trainer
+            p.register_hook(functools.partial(_div_by_world_size, expert_normalization_term))
 
     if neox_args.deepspeed:
         # DeepSpeed handles CUDA, FP16, and DDP components.
@@ -774,11 +808,20 @@ def backward_step(neox_args, timers, optimizer, model, loss):
     else:
         raise ValueError("Must be using deepspeed to run neox")
 
+def _div_by_world_size(world_size, tensor):
+    return tensor / world_size
 
 def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler):
     """Single training step."""
 
     # Pipeline parallelism schedules forward/backward/step
+
+    # debug moe loss gradient
+    # def hook_fn(grad):
+    #     print(f"{grad=}")
+    # for n, p in model.named_parameters():
+    #     if 'gate.wg.weight' in n:
+    #         p.register_hook(hook_fn)    
     assert not neox_args.is_pipe_parallel
     if neox_args.is_pipe_parallel:
         reduced_loss = train_step_pipe(
@@ -787,10 +830,11 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
     else:
         lm_losses = []
         moe_losses = []
+        moe_metadatas = []
         for _ in range(neox_args.gradient_accumulation_steps):
             # Forward model for one step.
             timers("forward").start()
-            lm_loss, moe_loss = forward_step(
+            lm_loss, moe_loss, moe_metadata = forward_step(
                 neox_args=neox_args,
                 timers=timers,
                 data_iterator=data_iterator,
@@ -799,11 +843,15 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
             )
             timers("forward").stop()
             lm_losses.append(lm_loss)
+
             if moe_loss is not None:
-                total_loss = lm_loss + moe_loss
+                total_loss = moe_loss+lm_loss
                 moe_losses.append(moe_loss)
             else:
                 total_loss = lm_loss
+            
+            if moe_metadata is not None:
+                moe_metadatas.append(moe_metadata)
             # Calculate gradients, reduce across processes, and clip.
             timers("backward").start()
             backward_step(
@@ -812,7 +860,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
                 optimizer=optimizer,
                 model=model,
                 loss=total_loss,
-            )
+            )            
             timers("backward").stop()
             # Update parameters.
             timers("optimizer").start()
@@ -826,6 +874,12 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
         }  # reduces losses across machines for logging
         if len(moe_losses) > 0:
             reduced_loss['moe_loss'] = reduce_losses(moe_losses).mean()
+        if len(moe_metadatas) > 0:
+            moe_metadata = _merge_and_average_dicts(moe_metadatas)
+            # the routing is global, we do not need all-reduce
+            for k,v in moe_metadatas.items():
+                reduced_loss[k] = v
+
     if neox_args.precision == "fp16" and model.optimizer.overflow:
         skipped_iter = 1
     else:
@@ -984,6 +1038,7 @@ def evaluate(
     model.eval()
     lm_losses = []
     moe_losses = []
+    moe_metadatas = []
     if neox_args.char_level_ppl:
         data_iterator = CharCounter(data_iterator, neox_args.tokenizer)
 
@@ -1005,7 +1060,7 @@ def evaluate(
                 else neox_args.gradient_accumulation_steps
             ):
                 # Forward evaluation
-                lm_loss, moe_loss = forward_step_fn(
+                lm_loss, moe_loss, moe_metadata = forward_step_fn(
                     model=model,
                     data_iterator=data_iterator,
                     neox_args=neox_args,
@@ -1013,7 +1068,10 @@ def evaluate(
                 )
                 
                 lm_losses.append(lm_loss)
-                moe_losses.append(moe_loss)
+                if moe_loss is not None:
+                    moe_losses.append(moe_loss)
+                if moe_metadata is not None:
+                    moe_metadatas.append(moe_metadata)
 
             # When contiguous memory optimizations are enabled, the buffers
             # allocated by the optimizations are deallocated during backward pass
@@ -1024,7 +1082,13 @@ def evaluate(
 
     # reduces losses across processes for logging & run eval harness tasks
     eval_results = {"lm_loss": reduce_losses(lm_losses).mean().item()}
-    eval_results["moe_loss"] = reduce_losses(moe_losses).mean().item()
+    if len(moe_losses) > 0:
+        eval_results["moe_loss"] = reduce_losses(moe_losses).mean().item()
+    if len(moe_metadatas) > 0:
+        moe_metadata = _merge_and_average_dicts(moe_metadatas)
+        for k,v in moe_metadata.items():
+            eval_results[k] = v
+    
     eval_results["lm_loss_ppl"] = math.exp(eval_results["lm_loss"])
 
     if neox_args.char_level_ppl:
