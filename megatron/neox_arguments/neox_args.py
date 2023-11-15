@@ -393,9 +393,21 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     moe_loss_weight: float = 0.01
 
+    moe_normalize_expert_grad: Literal["sqrt_world_size", "world_size", "no"] = "no"
+
+    moe_capacity_factor: float = 1.0
+    
+    moe_use_residual: bool = False
+
+    moe_aux_loss_weight: dict = None
+
+    moe_share_layers: bool = False
+
     from_dense_to_moe: bool = False
 
     expert_initialization: str = "zero"
+
+    moe_use_elbo:bool = False
     # choices: "zero", "from_dense_single_layer", "from_dense_all_layers", "no"
 
 @dataclass
@@ -527,7 +539,7 @@ class NeoXArgsLogging(NeoXArgsTemplate):
     Write TensorBoard logs to this directory.
     """
 
-    log_interval: int = 100
+    log_interval: int = 100 
     """
     Interval between logging.
     """
