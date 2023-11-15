@@ -43,6 +43,7 @@ from megatron.model.criterion import CrossEntropy, MoECrossEnropy
 # Pipeline parallelism
 from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
 from typing import Union, List
+from megatron import print_rank, print_rank_0
 
 
 def gpt2_attention_mask_func(attention_scores, ltor_mask):
@@ -235,6 +236,9 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                     layer_cls = MoEParallelTransformerLayerPipe
                 else:
                     layer_cls = ParallelTransformerLayerPipe
+                # TODO: implement shared moe layers
+                if self.neox_args.moe_share_layers:
+                    assert not self.num_pipeline_stages <= 1, "not support using pp and sharing moe layers together"
                 self.specs.append(
                     LayerSpec(
                         layer_cls,
@@ -364,6 +368,19 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 layers.append(Lambda(spec))
             else:
                 raise ValueError(f"Layer number {n} ({spec}) Not recognized")
+        # share all moe layers
+        if self.neox_args.moe_freq > 0 and self.neox_args.moe_share_layers:
+            moe_layer_indices = []
+            for i,layer in enumerate(layers):
+                if isinstance(layer, MoEParallelTransformerLayerPipe):
+                    moe_layer_indices.append(i)
+            first_moe_layer_index = moe_layer_indices[0]
+            for i in moe_layer_indices:
+                if i==first_moe_layer_index:
+                    continue
+                print_rank_0(f'sharing moe layer {i} with layer {first_moe_layer_index} .................................')
+                # layers[i] = layers[first_moe_layer_index]
+                layers[i].moe_layer.deepspeed_moe.experts = layers[first_moe_layer_index].moe_layer.deepspeed_moe.experts
         model = SequentialWrapper(
             layers,
             self.activation_checkpoint_interval,
