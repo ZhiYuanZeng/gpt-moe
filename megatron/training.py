@@ -379,7 +379,7 @@ def _merge_and_average_dicts(list_of_dicts):
     # Calculate the average by dividing the total values by the number of dictionaries
     num_dicts = len(list_of_dicts)
     for key in merged_dict:
-        merged_dict[key] /= num_dicts
+        merged_dict[key] = merged_dict[key]/num_dicts
 
     return merged_dict
 
@@ -401,7 +401,6 @@ def forward_step(
         timers("batch generator").stop()
 
     outputs = model((tokens, position_ids, attention_mask), neox_args=neox_args)
-    exit()
     if (
         is_train
         and neox_args.curriculum_learning
@@ -411,7 +410,7 @@ def forward_step(
         labels = labels[:, : neox_args.curriculum_seqlen].contiguous()
     if isinstance(outputs, tuple):
         lm_outputs, l_auxs, metadatas = outputs[0], outputs[1], outputs[2]
-        l_aux = torch.sum(l_auxs) * neox_args.moe_loss_weight
+        l_aux = torch.sum(l_auxs)
         moe_metadata = _merge_and_average_dicts(metadatas)
     else:
         lm_outputs = outputs
@@ -487,17 +486,20 @@ def get_model(neox_args, use_cache=False):
         # Call the mup replacement init functions on the model now that set_base_shapes has given each weight a .infshape attribute
         mup_weights_reinit(neox_args, model)
 
-    if getattr(neox_args, "moe_normalize_expert_grad", "world_size") == "sqrt_world_size":
+    if getattr(neox_args, "moe_normalize_expert_grad", "no") == "world_size":
+        expert_normalization_term = neox_args.moe_num_experts
+    elif getattr(neox_args, "moe_normalize_expert_grad", "no") == "sqrt_world_size":
         expert_normalization_term = math.sqrt(neox_args.moe_num_experts)
     else:
-        expert_normalization_term = neox_args.moe_num_experts
-    for n,p in model.named_parameters():
-        if not getattr(p, 'all_reduce', True):
-            print_rank_0(n)
-            # Scale grads by world_size/pg_size so that grads match the equivalent replicated
-            # world size expected within Trainer
-            p.register_hook(functools.partial(_div_by_world_size, expert_normalization_term))
-
+        expert_normalization_term = None
+    if expert_normalization_term is not None:
+        for n,p in model.named_parameters():
+            if not getattr(p, 'allreduce', True):
+                print_rank_0('..............................Moe parameters.............................')
+                print_rank_0(n)
+                # Scale grads by world_size/pg_size so that grads match the equivalent replicated
+                # world size expected within Trainer
+                p.register_hook(functools.partial(_div_by_world_size, expert_normalization_term))
     if neox_args.deepspeed:
         # DeepSpeed handles CUDA, FP16, and DDP components.
         return model
@@ -877,7 +879,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
         if len(moe_metadatas) > 0:
             moe_metadata = _merge_and_average_dicts(moe_metadatas)
             # the routing is global, we do not need all-reduce
-            for k,v in moe_metadatas.items():
+            for k,v in moe_metadata.items():
                 reduced_loss[k] = v
 
     if neox_args.precision == "fp16" and model.optimizer.overflow:
