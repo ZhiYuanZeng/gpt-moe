@@ -22,6 +22,7 @@ from megatron.model.norms import LayerNorm, RMSNorm, ScaleNorm
 from megatron.model.fused_softmax import SoftmaxFusionTypes
 from types import GeneratorType
 import torch.distributed as dist
+from megatron import print_rank_0, print_rank
 
 
 def get_params_for_weight_decay_optimization(module, neox_args):
@@ -172,6 +173,8 @@ class SequentialWrapper(torch.nn.Module):
                 if len(inputs) == 1:
                     inputs = inputs[0]
                 for idx, layer in enumerate(self.sequential[start:end]):
+                    # assert torch.is_grad_enabled(), idx
+                    # print_rank_0(f'{layer.__class__}, {inputs[0].requires_grad=}, {torch.is_grad_enabled()}')
                     inputs = layer(inputs)
                 return inputs
 
