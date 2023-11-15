@@ -2,6 +2,7 @@ from megatron.model.transformer import ParallelTransformerLayer, ParallelLinear
 from megatron import print_rank_0, print_rank
 import deepspeed
 import torch
+import torch.distributed as dist
 
 
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
@@ -12,17 +13,51 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         expert=self.mlp,
                         num_experts=neox_args.moe_num_experts,
                         ep_size=neox_args.ep_world_size,
-                        use_residual=False,
                         k=neox_args.moe_top_k,
+                        capacity_factor=neox_args.moe_capacity_factor,
+                        use_residual=neox_args.moe_use_residual,
                         min_capacity=neox_args.moe_min_capacity,
-                        noisy_gate_policy=neox_args.moe_noisy_gate_policy)
+                        noisy_gate_policy=neox_args.moe_noisy_gate_policy,
+                        aux_loss_weight=neox_args.moe_aux_loss_weight,
+                        use_elbo=neox_args.moe_use_elbo)
+        assert neox_args.moe_aux_loss_weight is not None 
+        print_rank(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
             if 'bias' in name: # share bias paramters
                 setattr(param, 'allreduce', True)
-                delattr(param, 'group_name')
+                if hasattr(param, 'group_name'):
+                    delattr(param, 'group_name')
         delattr(self, 'mlp')
 
+    @property
+    def experts_weights(self):
+        if self.mlp_type == 'llama':
+            return [
+                self.moe_layer.deepspeed_moe.experts.deepspeed_experts[0].w1.weight,
+                self.moe_layer.deepspeed_moe.experts.deepspeed_experts[0].w2.weight,
+                self.moe_layer.deepspeed_moe.experts.deepspeed_experts[0].w3.weight,
+            ]
+        else:
+            return [
+                self.moe_layer.deepspeed_moe.experts.deepspeed_experts[0].dense_4h_to_h.weight,
+                self.moe_layer.deepspeed_moe.experts.deepspeed_experts[0].dense_h_to_4h.weight,
+            ]
+    
+    def _check_same_num_elements(self, tensor):
+        # Get the total number of elements in the tensor for comparison
+        local_count = torch.tensor([tensor.numel()]).type_as(tensor)  # Get the number of elements in the local tensor
+
+        # Gather the counts of elements from all processes
+        all_counts = [torch.ones(1).type_as(tensor) for _ in range(dist.get_world_size())]
+        dist.all_gather(all_counts, local_count)
+
+        # Check if all counts are the same
+        is_same = all(c.item() == local_count.item() for c in all_counts)
+
+        assert is_same, "Number of elements in tensors across processes is not the same."
+
     def forward(self, x, attention_mask, all_l_auxs=None, all_metadata=None, layer_past=None):
+        self._check_same_num_elements(x)
         layer_past = layer_past if layer_past is not None else self.layer_past
         bias_dropout_fn = self._get_bias_dropout()
         # x: [b, s, h]
