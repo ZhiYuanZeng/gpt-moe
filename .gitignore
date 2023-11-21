@@ -154,3 +154,5 @@ data/
 hf_models/
 checkpoints/
 compress_llama_7b/
+
+train_scripts/

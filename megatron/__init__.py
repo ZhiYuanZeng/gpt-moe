@@ -22,6 +22,9 @@ def print_rank_0(*message):
     else:
         print(*message, flush=True)
 
+def print_rank(*message):
+    torch.distributed.barrier()
+    print(f'rank:{torch.distributed.get_rank()}, ', *message, flush=True)
 
 from .initialize import initialize_megatron
 from .neox_arguments import NeoXArgs

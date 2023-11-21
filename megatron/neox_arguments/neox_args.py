@@ -389,7 +389,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     moe_min_capacity: float = 0.
 
-    moe_noisy_gate_policy: str = None
+    moe_noisy_gate_policy: Literal['Jitter', 'RSample', 'None'] = 'None'
 
     moe_loss_weight: float = 0.01
 
