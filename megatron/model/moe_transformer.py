@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
-    def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False):
+    def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False, experts = None):
         super().__init__(neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe, rotary, use_cache)
         self.moe_layer = deepspeed.moe.layer.MoE(
                         hidden_size=neox_args.hidden_size,
@@ -21,13 +21,17 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         aux_loss_weight=neox_args.moe_aux_loss_weight,
                         use_elbo=neox_args.moe_use_elbo)
         assert neox_args.moe_aux_loss_weight is not None 
-        print_rank(neox_args.moe_aux_loss_weight)
+        print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
             if 'bias' in name: # share bias paramters
                 setattr(param, 'allreduce', True)
                 if hasattr(param, 'group_name'):
                     delattr(param, 'group_name')
         delattr(self, 'mlp')
+
+    @property
+    def experts(self):
+        return self.moe_layer.deepspeed_moe.experts
 
     @property
     def experts_weights(self):
