@@ -60,6 +60,8 @@ from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optim
 from from_dense_to_moe import transform, set_moe_args
 import math
 import functools
+from collections import defaultdict
+
 
 def mup_weights_reinit(neox_args, model):
     def has_method(o, name):
@@ -363,11 +365,33 @@ def get_batch_sequential(forward_input, neox_args):
     )
     return (forward_input[0], forward_input[1], attention_mask)
 
-def _merge_and_average_dicts(list_of_dicts):
+def merge_dicts_average_values_stack_list(list_of_dicts):
+    # Iterate over each dictionary in the list
+    merged_dict = defaultdict(int)
+    layer_idx_counter = defaultdict(int)
+    for data_dict in list_of_dicts:
+        for key, value in data_dict.items():
+            if isinstance(value, torch.Tensor) and value.numel() > 1: # it is a list
+                i = layer_idx_counter[key]
+                merged_dict[f'layer_{i}_{key}'] = value
+                layer_idx_counter[key] += 1
+            else:
+                merged_dict[key] += value
+
+    # Calculate the average by dividing the total values by the number of dictionaries
+    num_dicts = len(list_of_dicts)
+    for key in merged_dict:
+        if merged_dict[key].numel() == 1:
+            merged_dict[key] = merged_dict[key]/num_dicts
+
+    return merged_dict
+
+def merge_dicts_average_values(list_of_dicts):
     merged_dict = {}
 
     # Iterate over each dictionary in the list
     for data_dict in list_of_dicts:
+        # assert data_dict['layer_11_histgram'].sum() == 16384, data_dict['layer_11_histgram']
         for key, value in data_dict.items():
             # If the key is not in the merged_dict, initialize it with the value
             if key not in merged_dict:
@@ -375,13 +399,21 @@ def _merge_and_average_dicts(list_of_dicts):
             else:
                 # If the key is already in the merged_dict, add the value to the existing total
                 merged_dict[key] += value
-
+    # assert merged_dict['layer_11_histgram']. == 16384 * len(list_of_dicts)
     # Calculate the average by dividing the total values by the number of dictionaries
     num_dicts = len(list_of_dicts)
     for key in merged_dict:
         merged_dict[key] = merged_dict[key]/num_dicts
-
     return merged_dict
+
+def flatten_histogram_to_list(metadata):
+    for k,v in metadata.items():
+        if v.numel() > 1:
+            flatten_values = []
+            for number, frequency in enumerate(v, start=1):
+                flatten_values.extend([number] * round(frequency.item()))
+            metadata[k] = torch.tensor(flatten_values).type_as(v)
+    return metadata
 
 def forward_step(
     data_iterator, model, neox_args, timers, return_logits=False, is_train=False
@@ -411,7 +443,7 @@ def forward_step(
     if isinstance(outputs, tuple):
         lm_outputs, l_auxs, metadatas = outputs[0], outputs[1], outputs[2]
         l_aux = torch.sum(l_auxs)
-        moe_metadata = _merge_and_average_dicts(metadatas)
+        moe_metadata = merge_dicts_average_values_stack_list(metadatas)
     else:
         lm_outputs = outputs
         l_aux = None
@@ -877,7 +909,8 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
         if len(moe_losses) > 0:
             reduced_loss['moe_loss'] = reduce_losses(moe_losses).mean()
         if len(moe_metadatas) > 0:
-            moe_metadata = _merge_and_average_dicts(moe_metadatas)
+            moe_metadata = merge_dicts_average_values(moe_metadatas)
+            moe_metadata = flatten_histogram_to_list(moe_metadata)
             # the routing is global, we do not need all-reduce
             for k,v in moe_metadata.items():
                 reduced_loss[k] = v
@@ -1087,7 +1120,8 @@ def evaluate(
     if len(moe_losses) > 0:
         eval_results["moe_loss"] = reduce_losses(moe_losses).mean().item()
     if len(moe_metadatas) > 0:
-        moe_metadata = _merge_and_average_dicts(moe_metadatas)
+        moe_metadata = merge_dicts_average_values_stack_list(moe_metadatas)
+        moe_metadata = flatten_histogram_to_list(moe_metadata)
         for k,v in moe_metadata.items():
             eval_results[k] = v
     

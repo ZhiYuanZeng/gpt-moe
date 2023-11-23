@@ -132,6 +132,8 @@ def training_log(
     got_nan = False
     for key in loss_dict:
         if not skipped_iter:
+            if loss_dict[key].numel() > 1:
+                continue
             total_loss_dict[key] = total_loss_dict.get(key, 0.0) + loss_dict[key]
         else:
             value = loss_dict[key].float().sum().item()
@@ -383,6 +385,9 @@ def tb_wandb_log(
     do_log = torch.distributed.get_rank() == 0 or all_ranks
     if do_log and value is not None:
         if tensorboard_writer:
-            tensorboard_writer.add_scalar(key, value, iteration_no)
+            if isinstance(value, torch.Tensor) and value.numel() > 1:
+                tensorboard_writer.add_histogram(key, value)
+            else:
+                tensorboard_writer.add_scalar(key, value, iteration_no)
         if use_wandb:
             wandb.log({key: value}, step=iteration_no)
