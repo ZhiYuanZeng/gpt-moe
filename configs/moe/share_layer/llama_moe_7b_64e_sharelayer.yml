@@ -89,10 +89,10 @@
    "warmup": 0.01,
    "checkpoint_factor": 5000,
    "eval_interval": 500,
-   "eval_iters": 10,
+   "eval_iters": 1,
 
    # logging
-   "log_interval": 100,
+   "log_interval": 1,
    "steps_per_print": 10,
    "keep_last_n_checkpoints": 4,
    "wall_clock_breakdown": true,
@@ -108,8 +108,9 @@
   "deepspeed_slurm": true,
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk1_loadbalance0.01_sharelayer",
   # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia_1b_from_scratch/",
-  "tensorboard-dir": "tensorboard/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk1_loadbalance0.01_sharelayer",
+  "tensorboard-dir": "tensorboard/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk1_loadbalance0.01_sharelayer_reimplement",
   "log-dir": "./logs",
+  "use_wandb": false,
 
   "moe_num_experts": 64,
   "ep_world_size": 32,
