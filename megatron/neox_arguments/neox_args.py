@@ -401,7 +401,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     moe_aux_loss_weight: dict = None
 
-    moe_share_layers: bool = False
+    moe_share_layers: dict = None
 
     from_dense_to_moe: bool = False
 

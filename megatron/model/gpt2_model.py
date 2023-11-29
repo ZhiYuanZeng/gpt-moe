@@ -44,7 +44,8 @@ from megatron.model.criterion import CrossEntropy, MoECrossEnropy
 from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
 from typing import Union, List
 from megatron import print_rank, print_rank_0
-
+from functools import partial
+from megatron.model.moe.share_layer_moe import LayerAwareMoE
 
 def gpt2_attention_mask_func(attention_scores, ltor_mask):
     mask_value = torch.finfo(attention_scores.dtype).min
@@ -237,21 +238,37 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 else:
                     layer_cls = ParallelTransformerLayerPipe
                 # TODO: implement shared moe layers
-                if self.neox_args.moe_share_layers:
+                if self.neox_args.moe_share_layers['share'] and layer_cls == MoEParallelTransformerLayerPipe:
                     assert self.neox_args.pipe_parallel_size <= 1, "not support using pp and sharing moe layers together"
-                self.specs.append(
-                    LayerSpec(
-                        layer_cls,
-                        neox_args=self.neox_args,
-                        attention_mask_func=gpt2_attention_mask_func,
-                        init_method=self.init_method,
-                        output_layer_init_method=self.output_layer_init_method,
-                        layer_number=i,
-                        rpe=rpe_emb if self.neox_args.pos_emb == "rpe" else None,
-                        rotary=self.neox_args.pos_emb == "rotary",
-                        use_cache=self.use_cache,
+                    self.specs.append(
+                        TiedLayerSpec(
+                            "moe",
+                            MoEParallelTransformerLayerPipe,
+                            neox_args=self.neox_args,
+                            attention_mask_func=gpt2_attention_mask_func,
+                            init_method=self.init_method,
+                            output_layer_init_method=self.output_layer_init_method,
+                            layer_number=i,
+                            rpe=rpe_emb if self.neox_args.pos_emb == "rpe" else None,
+                            rotary=self.neox_args.pos_emb == "rotary",
+                            use_cache=self.use_cache,
+                        )
                     )
-                )
+
+                else:
+                    self.specs.append(
+                        LayerSpec(
+                            layer_cls,
+                            neox_args=self.neox_args,
+                            attention_mask_func=gpt2_attention_mask_func,
+                            init_method=self.init_method,
+                            output_layer_init_method=self.output_layer_init_method,
+                            layer_number=i,
+                            rpe=rpe_emb if self.neox_args.pos_emb == "rpe" else None,
+                            rotary=self.neox_args.pos_emb == "rotary",
+                            use_cache=self.use_cache,
+                        )
+                    )
 
         # used to drop attention mask + reshape hidden states
         if self.neox_args.moe_freq > 0:
@@ -353,9 +370,17 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
             if isinstance(spec, TiedLayerSpec):
                 if spec.key in tied_layers:
                     # receiver
-                    layers.append(
-                        Lambda(lambda x: spec.forward_fn(tied_layers[spec.key][0], x))
-                    )
+                    if spec.key=='moe':
+                        assert spec.typename == MoEParallelTransformerLayerPipe
+                        assert isinstance(tied_layers[spec.key][0], MoEParallelTransformerLayerPipe)
+                        experts = tied_layers[spec.key][0].experts
+                        layers.append(
+                            spec.build(log=False, experts=experts)
+                        )
+                    else:
+                        layers.append(
+                            Lambda(lambda x: spec.forward_fn(tied_layers[spec.key][0], x))
+                        )
                 else:
                     # owner
                     module = spec.build(log=False)
@@ -368,19 +393,18 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 layers.append(Lambda(spec))
             else:
                 raise ValueError(f"Layer number {n} ({spec}) Not recognized")
-        # share all moe layers
-        if self.neox_args.moe_freq > 0 and self.neox_args.moe_share_layers:
+        
+        if self.neox_args.moe_freq > 0 and self.neox_args.moe_share_layers['share'] and self.neox_args.moe_share_layers['num_z']>1:
             moe_layer_indices = []
             for i,layer in enumerate(layers):
                 if isinstance(layer, MoEParallelTransformerLayerPipe):
                     moe_layer_indices.append(i)
             first_moe_layer_index = moe_layer_indices[0]
+            num_moe_layers = len(moe_layer_indices)
             for i in moe_layer_indices:
-                if i==first_moe_layer_index:
-                    continue
-                print_rank_0(f'sharing moe layer {i} with layer {first_moe_layer_index} .................................')
-                # layers[i] = layers[first_moe_layer_index]
-                layers[i].moe_layer.deepspeed_moe.experts = layers[first_moe_layer_index].moe_layer.deepspeed_moe.experts
+                layer.deepspeed_moe.gate.set_layer_aware(num_layers=num_moe_layers, layer_idx=i, num_z=self.neox_args.moe_share_layers['num_z'])
+                layer.deepspeed_moe.gate.layer_logits = layers[first_moe_layer_index].deepspeed_moe.gate.layer_logits
+
         model = SequentialWrapper(
             layers,
             self.activation_checkpoint_interval,

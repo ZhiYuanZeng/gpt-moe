@@ -3,12 +3,16 @@ from megatron import print_rank_0, print_rank
 import deepspeed
 import torch
 import torch.distributed as dist
-
+from megatron.model.moe.share_layer_moe import LayerAwareMoE
 
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
     def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False, experts = None):
         super().__init__(neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe, rotary, use_cache)
-        self.moe_layer = deepspeed.moe.layer.MoE(
+        if neox_args.moe_share_layers['share'] and neox_args.moe_share_layers['num_z']>1:
+            MOE_CLS = LayerAwareMoE
+        else:
+            MOE_CLS = deepspeed.moe.layer.MoE
+        self.moe_layer = MOE_CLS(
                         hidden_size=neox_args.hidden_size,
                         expert=self.mlp,
                         num_experts=neox_args.moe_num_experts,
