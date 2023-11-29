@@ -229,7 +229,8 @@ def _build_index_mappings(
     print_rank_0(
         "    loaded indexed file in {:3.3f} seconds".format(time.time() - start_time)
     )
-    print_rank_0("    total number of samples: {}".format(sample_idx.shape[0]))
+    print_rank_0("    number of tokens in the dataset: {}".format(tokens_per_epoch))
+    print_rank_0("    total number of samples: {} (each sample is a window, the number = num_samples_each_epoch * num_epoch )".format(sample_idx.shape[0]))
     print_rank_0("    total number of epochs: {}".format(num_epochs))
 
     return doc_idx, sample_idx, shuffle_idx

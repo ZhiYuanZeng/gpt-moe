@@ -751,8 +751,6 @@ def setup_optim(model, neox_args):
         else:
             _model_params = param_groups if optimizer is None else None
             _lr_scheduler = lr_scheduler
-        torch.distributed.barrier()
-        print(f'rank:{torch.distributed.get_rank()} deepspeed.initialize', flush=True)
 
         model, optimizer, _, lr_scheduler = deepspeed.initialize(
             model=model,
@@ -1184,6 +1182,8 @@ def evaluate_and_print_results(
                     tensorboard_writer=neox_args.tensorboard_writer,
                 )
         else:
+            if isinstance(v, torch.Tensor) and v.numel() > 1:
+                continue
             string += f"{k} value: {v:.6E} | "
             tb_wandb_log(
                 f"{chart_name}/{k}",

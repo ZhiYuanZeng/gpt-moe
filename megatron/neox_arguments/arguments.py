@@ -47,6 +47,7 @@ from .neox_args import (
     NeoXArgsLRScheduler,
     ATTENTION_TYPE_CHOICES,
 )
+from megatron import print_rank_0
 
 # ZERO defaults by deespeed
 # These values should not be changed unless defaults in deepspeed are changed
@@ -774,6 +775,9 @@ class NeoXArgs(*BASE_CLASSES):
     def calculate_batch_parameters(
         dp_world_size, train_batch=None, micro_batch=None, grad_acc=None
     ):
+        print_rank_0('before trasformation:............................')
+        print_rank_0(train_batch, micro_batch, grad_acc)
+        
         # all values are provided nothing needs to be set
         if train_batch is not None and micro_batch is not None and grad_acc is not None:
             return train_batch, micro_batch, grad_acc
@@ -808,6 +812,8 @@ class NeoXArgs(*BASE_CLASSES):
             assert (
                 False
             ), "Either train_batch_size or train_micro_batch_size_per_gpu needs to be provided"
+        print_rank_0('after trasformation:............................')
+        print_rank_0(train_batch, micro_batch, grad_acc)
         return int(train_batch), int(micro_batch), int(grad_acc)
 
     @staticmethod
