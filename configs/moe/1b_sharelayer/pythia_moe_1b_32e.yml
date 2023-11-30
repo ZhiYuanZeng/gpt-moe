@@ -1,0 +1,120 @@
+{
+  # parallelism
+  "pipe-parallel-size": 0,
+  "model-parallel-size": 0,
+
+  # model settings
+  "num-layers": 24,
+  "hidden-size": 2048,
+  "num-attention-heads": 16,
+  "seq-length": 2048,
+  "max-position-embeddings": 2048,
+  "pos-emb": "rotary",
+  "rotary-pct": 0.25,
+  "no-weight-tying": true,
+  "gpt-j-residual": true,
+  "output-layer-parallelism": "column",
+  
+  "attention-config": [[["flash"], 24]],
+
+  "scaled-upper-triang-masked-softmax-fusion": false,
+  "bias-gelu-fusion": true,
+
+  # init methods
+  "init_method": "small_init",
+  "output_layer_init_method": "wang_init",
+
+  "optimizer": {
+    "type": "Adam",
+    "params": {
+      "lr": 0.0002,
+      "betas": [0.9, 0.95],
+      "eps": 1.0e-8
+    }
+  },
+  "min_lr": 0.00002,
+
+  "zero_optimization": {
+    "stage": 1,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 500000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 500000000,
+    "contiguous_gradients": true,
+    "cpu_offload": false
+  },
+
+  "train_batch_size": 512,
+  "gas": 1,
+  "data-impl": "mmap",
+  "num_workers": 1,
+
+  # activation checkpointing
+  "checkpoint-activations": true,
+  "checkpoint-num-layers": 1,
+  "partition-activations": true,
+  "synchronize-each-layer": true,
+
+  # regularization
+  "gradient_clipping": 1.0,
+  "weight-decay": 0.1,
+  "hidden-dropout": 0,
+  "attention-dropout": 0,
+
+  # precision settings
+  "fp16": {
+    "bf16": true,
+    "enabled": true,
+    "loss_scale": 0,
+    "loss_scale_window": 1000,
+    "initial_scale_power": 12,
+    "hysteresis": 2,
+    "min_loss_scale": 1
+  },
+
+  "train-iters": 20000,
+  "lr-decay-iters": 20000,
+  "distributed-backend": "nccl",
+  "lr-decay-style": "cosine",
+  "warmup": 0.05,
+  "checkpoint-factor": 5000,
+  # "extra-save-iters": [0],
+  "eval-interval": 1000,
+  "eval-iters": 10,
+  # "load_iteration": 10000,
+
+  "log-interval": 10,
+  "steps_per_print": 10,
+  "wall_clock_breakdown": true,
+
+  "train-data-paths": ["data/pile_00/pile_00_text_document"],
+  "valid-data-paths": ["data/pile_00/pile_00_text_document"],
+  "test-data-paths": ["data/pile_00/pile_00_text_document"],
+
+  "vocab-file": "data/gpt2-vocab.json",
+  "merge-file": "data/gpt2-merges.txt",
+
+  "launcher": "slurm",
+  "deepspeed_slurm": true,
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/1b_sharelayer/pythia_1b_32e",
+  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/moe_1b_32e_from_scratch/",
+  "tensorboard-dir": "tensorboard/moe/1b_sharelayer/pythia_1b_32e",
+
+  "moe_num_experts": 32,
+  "ep_world_size": 8,
+  "moe_top_k": 1,
+  "moe_min_capacity": 0,
+  "moe_freq": 2,
+  "moe_loss_weight": 0.001,
+  "log_dir": "./logs",
+  "moe_aux_loss_weight": {
+    "load_balance": 0.01,
+    "zloss": 0,
+    "entropy": 0,
+  },
+  "moe_share_layers":{
+    "share": true,
+    "num_z": 1
+  }
+}
