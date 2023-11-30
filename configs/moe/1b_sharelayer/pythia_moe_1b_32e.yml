@@ -102,7 +102,7 @@
   "tensorboard-dir": "tensorboard/moe/1b_sharelayer/pythia_1b_32e",
 
   "moe_num_experts": 32,
-  "ep_world_size": 8,
+  "ep_world_size": 32,
   "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
