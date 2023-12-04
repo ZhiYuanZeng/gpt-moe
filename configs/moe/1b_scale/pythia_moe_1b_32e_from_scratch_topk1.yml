@@ -73,16 +73,16 @@
     "min_loss_scale": 1
   },
 
-  "train-iters": 20000,
-  "lr-decay-iters": 20000,
+  "train-iters": 50000,
+  "lr-decay-iters": 50000,
   "distributed-backend": "nccl",
   "lr-decay-style": "cosine",
-  "warmup": 0.05,
-  "checkpoint-factor": 5000,
+  "warmup": 0.01,
+  "checkpoint-factor": 10000,
   # "extra-save-iters": [0],
-  "eval-interval": 1000,
+  "eval-interval": 40000,
   "eval-iters": 10,
-  # "load_iteration": 10000,
+  "load_iteration": 10000,
 
   "log-interval": 10,
   "steps_per_print": 10,
@@ -97,21 +97,15 @@
 
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/1b/pythia_1b_64e",
-  "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/1b/pythia_1b_64e/",
-  "load_iteration": 5000,
-  "tensorboard-dir": "tensorboard/moe/1b/pythia_1b_64e",
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/moe_1b_32e_from_scratch_topk1",
+  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/moe_1b_32e_from_scratch/",
+  "tensorboard-dir": "tensorboard/moe/moe_1b_32e_from_scratch_topk1",
 
-  "moe_num_experts": 64,
+  "moe_num_experts": 32,
   "ep_world_size": 32,
   "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
   "moe_loss_weight": 0.001,
   "log_dir": "./logs",
-  "moe_aux_loss_weight": {
-    "load_balance": 0.01,
-    "zloss": 0,
-    "entropy": 0,
-  },
 }
