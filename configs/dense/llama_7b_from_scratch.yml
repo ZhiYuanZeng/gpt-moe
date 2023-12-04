@@ -4,7 +4,7 @@
   # "make_vocab_size_divisible_by": 1, # thuis param cause cuda index error
 
   # model settings
-  "num_layers": 8,
+  "num_layers": 32,
   "hidden_size": 4096,
   "num_attention_heads": 32,
   "seq_length": 2048,
@@ -54,7 +54,7 @@
    "min_lr": 0.000012,
 
    # batch / data settings
-   "train_micro_batch_size_per_gpu": 8,
+   "train_batch_size": 256,
    "data_impl": "mmap",
 
    # activation checkpointing
