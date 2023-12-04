@@ -305,8 +305,8 @@ def convert_model_sequential(
     num_heads_per_output_shard = num_heads // num_output_shards
     hidden_size = params["dim"]
     dims_per_head = hidden_size // num_heads
-    # base = 10000.0
-    # inv_freq = 1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
+    base = params.get("rope_theta", 10000.0)
+    rope_freqs = 1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
 
     def permute_rotary(w):
         assert w.shape == (num_heads, dims_per_head, hidden_size)
@@ -367,12 +367,12 @@ def convert_model_sequential(
     helper.del_loaded("output.weight")
 
     # Layers
-    if model_size == "7B":
-        rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
-        helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
-    else:
-        rope_freqs = loaded[0]["rope.freqs"]
-        helper.del_loaded("rope.freqs")
+    # if model_size == "7B":
+    #     rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
+    #     helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
+    # else:
+    #     rope_freqs = loaded[0]["rope.freqs"]
+    #     helper.del_loaded("rope.freqs")
     for layer_i in range(num_layers):
 
         # Linear
@@ -617,7 +617,7 @@ def main():
         print("parallel")
         convert_model_pipeline(
             output_base_path=args.output_dir,
-            input_base_path=os.path.join(args.input_dir, args.model_size),
+            input_base_path=args.input_dir,
             model_size=args.model_size,
             num_output_shards=args.num_output_shards,
         )
@@ -625,7 +625,7 @@ def main():
         print("sequential")
         convert_model_sequential(
             output_base_path=args.output_dir,
-            input_base_path=os.path.join(args.input_dir, args.model_size),
+            input_base_path=args.input_dir,
             model_size=args.model_size,
             num_output_shards=args.num_output_shards,
         )

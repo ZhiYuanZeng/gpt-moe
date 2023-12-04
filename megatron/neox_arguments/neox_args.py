@@ -403,11 +403,9 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     moe_share_layers: dict = None
 
-    from_dense_to_moe: bool = False
+    from_dense_to_moe: dict = None
 
-    expert_initialization: str = "zero"
-
-    moe_use_elbo:bool = False
+    moe_use_elbo: bool = False
     # choices: "zero", "from_dense_single_layer", "from_dense_all_layers", "no"
 
 @dataclass
