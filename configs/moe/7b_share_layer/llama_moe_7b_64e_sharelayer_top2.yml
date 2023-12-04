@@ -88,8 +88,8 @@
    "lr_decay_style": "cosine",
    "warmup": 0.01,
    "checkpoint_factor": 5000,
-   "eval_interval": 500,
-   "eval_iters": 1,
+   "eval_interval": 1000,
+   "eval_iters": 10,
 
    # logging
    "log_interval": 1,
@@ -106,15 +106,15 @@
 
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk1_loadbalance0.01_sharelayer",
-  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia_1b_from_scratch/",
-  "tensorboard-dir": "tensorboard/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk1_loadbalance0.01_sharelayer_reimplement",
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer",
+  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer/",
+  "tensorboard-dir": "tensorboard/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer_reimplement",
   "log-dir": "./logs",
   "use_wandb": false,
 
   "moe_num_experts": 64,
   "ep_world_size": 32,
-  "moe_top_k": 1,
+  "moe_top_k": 2,
   "moe_min_capacity": 0,
   "moe_freq": 2,
   "moe_aux_loss_weight": {
@@ -123,6 +123,7 @@
     "entropy": 0,
     "kl_div": 0
   },
+  # "load_iteration": 10000,
   # "moe_use_elbo": true
   "moe_share_layers": true
   # "moe_normalize_expert_grad": "sqrt_world_size",
