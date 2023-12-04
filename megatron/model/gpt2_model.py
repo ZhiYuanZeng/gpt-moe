@@ -238,7 +238,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 else:
                     layer_cls = ParallelTransformerLayerPipe
                 # TODO: implement shared moe layers
-                if self.neox_args.moe_share_layers['share'] and layer_cls == MoEParallelTransformerLayerPipe:
+                if self.neox_args.moe_share_layers is not None and layer_cls == MoEParallelTransformerLayerPipe:
                     assert self.neox_args.pipe_parallel_size <= 1, "not support using pp and sharing moe layers together"
                     self.specs.append(
                         TiedLayerSpec(
@@ -394,7 +394,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
             else:
                 raise ValueError(f"Layer number {n} ({spec}) Not recognized")
         
-        if self.neox_args.moe_freq > 0 and self.neox_args.moe_share_layers['share'] and self.neox_args.moe_share_layers['num_z']>1:
+        if self.neox_args.moe_freq > 0 and self.neox_args.moe_share_layers is not None and self.neox_args.moe_share_layers['num_z']>1:
             moe_layer_indices = []
             for i,layer in enumerate(layers):
                 if isinstance(layer, MoEParallelTransformerLayerPipe):

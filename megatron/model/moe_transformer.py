@@ -8,7 +8,7 @@ from megatron.model.moe.share_layer_moe import LayerAwareMoE
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
     def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False, experts = None):
         super().__init__(neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe, rotary, use_cache)
-        if neox_args.moe_share_layers['share'] and neox_args.moe_share_layers['num_z']>1:
+        if neox_args.moe_share_layers is not None and neox_args.moe_share_layers['num_z']>1:
             MOE_CLS = LayerAwareMoE
         else:
             MOE_CLS = deepspeed.moe.layer.MoE
@@ -23,7 +23,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         min_capacity=neox_args.moe_min_capacity,
                         noisy_gate_policy=neox_args.moe_noisy_gate_policy,
                         aux_loss_weight=neox_args.moe_aux_loss_weight,
-                        use_elbo=neox_args.moe_use_elbo)
+                        use_elbo=neox_args.moe_use_elbo,
+                        experts=experts)
         assert neox_args.moe_aux_loss_weight is not None 
         print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
@@ -32,6 +33,7 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                 if hasattr(param, 'group_name'):
                     delattr(param, 'group_name')
         delattr(self, 'mlp')
+        self.is_moe_layer = True
 
     @property
     def experts(self):
