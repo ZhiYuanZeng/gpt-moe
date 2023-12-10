@@ -240,9 +240,13 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 # TODO: implement shared moe layers
                 if self.neox_args.moe_share_layers is not None and layer_cls == MoEParallelTransformerLayerPipe:
                     assert self.neox_args.pipe_parallel_size <= 1, "not support using pp and sharing moe layers together"
+                    group_size = self.neox_args.moe_share_layers.get('group_size', 1)
+                    assert self.neox_args.num_layers % group_size == 0
+                    group_idx = i // group_size
+                    # only share params inside group
                     self.specs.append(
                         TiedLayerSpec(
-                            "moe",
+                            "moe"+'_group_'+str(group_idx),
                             MoEParallelTransformerLayerPipe,
                             neox_args=self.neox_args,
                             attention_mask_func=gpt2_attention_mask_func,
@@ -370,7 +374,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
             if isinstance(spec, TiedLayerSpec):
                 if spec.key in tied_layers:
                     # receiver
-                    if spec.key=='moe':
+                    if 'moe' in spec.key:
                         assert spec.typename == MoEParallelTransformerLayerPipe
                         assert isinstance(tied_layers[spec.key][0], MoEParallelTransformerLayerPipe)
                         experts = tied_layers[spec.key][0].experts
@@ -399,11 +403,12 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
             for i,layer in enumerate(layers):
                 if isinstance(layer, MoEParallelTransformerLayerPipe):
                     moe_layer_indices.append(i)
-            first_moe_layer_index = moe_layer_indices[0]
             num_moe_layers = len(moe_layer_indices)
             for i in moe_layer_indices:
-                layer.deepspeed_moe.gate.set_layer_aware(num_layers=num_moe_layers, layer_idx=i, num_z=self.neox_args.moe_share_layers['num_z'])
-                layer.deepspeed_moe.gate.layer_logits = layers[first_moe_layer_index].deepspeed_moe.gate.layer_logits
+                layers[i].moe_layer.set_layer_gate(
+                    num_layers=num_moe_layers, layer_idx=i, 
+                    num_z=self.neox_args.moe_share_layers['num_z'],
+                    layer_gate_type=self.neox_args.moe_share_layers['layer_gate_type'])
 
         model = SequentialWrapper(
             layers,
