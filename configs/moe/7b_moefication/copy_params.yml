@@ -54,8 +54,8 @@
    "min_lr": 0.0000012,
 
    # batch / data settings
-   "train_batch_size": 512,
-   "gas": 1,
+   "train_batch_size": 256,
+   "train_micro_batch_size_per_gpu": 2,
    "data_impl": "mmap",
 
    # activation checkpointing
@@ -110,8 +110,10 @@
   "load_iteration": 0,
   "tensorboard-dir": "tensorboard/moefication/llama_7b_finetune/",
   "log-dir": "./logs",
-  "from_dense_to_moe": {
+  "from_dense_to_moe": { # only be used for convert ckpts from dense to moe offline
     "expert_init": "copy",
+    "dense_dir": "./checkpoints/neox/llama7B",
+    "moe_dir": "./checkpoints/neox/llama7B-e32",
     "moe_num_experts": 32,
     "ep_world_size": 32,
     "moe_top_k": 1,
