@@ -345,11 +345,16 @@ def training_log(
 
         for key in total_loss_dict:
             if key not in [skipped_iters_key, got_nan_key]:
-                v = (
-                    total_loss_dict[key].item()
-                    if hasattr(total_loss_dict[key], "item")
-                    else total_loss_dict[key]
-                )
+                try:
+                    if isinstance(loss_dict[key], torch.Tensor) and loss_dict[key].numel() != 1:
+                        continue
+                    v = (
+                        total_loss_dict[key].item()
+                        if hasattr(total_loss_dict[key], "item")
+                        else total_loss_dict[key]
+                    )
+                except Exception as e:
+                    print(f'logging error ({e})! {key=}, {total_loss_dict[key]=}', flush=True)
                 avg = v / float(num_iterations)
                 log_string += " {}: {:.6E} |".format(key, avg)
                 total_loss_dict[key] = 0.0
@@ -384,10 +389,16 @@ def tb_wandb_log(
     # logs to both tb and wandb (if present) from the zeroth rank
     do_log = torch.distributed.get_rank() == 0 or all_ranks
     if do_log and value is not None:
-        if tensorboard_writer:
-            if isinstance(value, torch.Tensor) and value.numel() > 1:
-                tensorboard_writer.add_histogram(key, value)
-            else:
-                tensorboard_writer.add_scalar(key, value, iteration_no)
-        if use_wandb:
-            wandb.log({key: value}, step=iteration_no)
+        try:
+            if tensorboard_writer:
+                if isinstance(value, torch.Tensor) and value.numel() > 1:
+                    tensorboard_writer.add_histogram(key, value+iteration_no, iteration_no)
+                else:
+                    tensorboard_writer.add_scalar(key, value, iteration_no)
+            if use_wandb:
+                if isinstance(value, torch.Tensor) and value.numel() != 1:
+                    pass
+                else:
+                    wandb.log({key: value}, step=iteration_no)
+        except Exception as e:
+            print(f'tensorboard/wandb logging error ({e})! {key=}, {value=}', flush=True)
