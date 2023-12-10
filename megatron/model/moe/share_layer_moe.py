@@ -17,13 +17,14 @@ from deepspeed.moe.sharded_moe import (
     F
 )
 import torch
+from torch.distributions import Multinomial
 
 class LayerAwareMoE(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False):
-        super(MoE, self).__init__(
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None):
+        super(LayerAwareMoE, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
             num_experts=num_experts, 
@@ -39,7 +40,8 @@ class LayerAwareMoE(MoE):
             use_tutel=use_tutel, 
             enable_expert_tensor_parallelism=enable_expert_tensor_parallelism, 
             aux_loss_weight=aux_loss_weight,
-            use_elbo=use_elbo)
+            use_elbo=use_elbo,
+            experts=experts)
         
         experts = self.deepspeed_moe.experts # reused created experts to save memory
         GATE_CLS = LayerAwareGate
@@ -53,19 +55,26 @@ class LayerAwareMoE(MoE):
                                       use_tutel=use_tutel,
                                       use_elbo=use_elbo)
 
+    def set_layer_gate(self, num_layers, layer_idx, num_z, layer_gate_type):
+        self.deepspeed_moe.gate.set_layer_gate(num_layers, layer_idx, num_z, layer_gate_type)
 
 class LayerAwareGate(TopKGate):
-    def set_layer_aware(self, num_layers, layer_idx, num_z):
+    def set_layer_gate(self, num_layers, layer_idx, num_z, layer_gate_type):
         # p(e|x,l)=\sum p(z|l)p(e|x,z)
         assert num_layers != -1
         assert num_z != -1 
         assert layer_idx != -1
-        self.num_experts = self.wg.weight.shape[-1]
+        self.num_experts = self.wg.weight.shape[0]
         self.layer_idx = layer_idx
         self.num_z = num_z
         assert self.num_experts % num_z == 0
         self.num_experts_per_z = self.num_experts//num_z
-        self.layer_logits = torch.nn.Parameter(torch.randn(num_layers), num_z)
+
+        assert layer_gate_type in ('product', 'add', 'none')
+        if layer_gate_type == 'add':
+            num_z = self.num_experts
+        self.layer_logits = torch.nn.Parameter(torch.zeros(num_z))
+        self.layer_gate_type = layer_gate_type
     
     def forward(self,
                 input: torch.Tensor,
@@ -83,35 +92,33 @@ class LayerAwareGate(TopKGate):
         if self.noisy_gate_policy == 'Jitter' and self.training:
             input_fp32 = multiplicative_jitter(input_fp32, device=input.device)
         logits = self.wg(input_fp32)
+        layer_probs = torch.softmax(self.layer_logits, dim=-1) # (num_z,)
         
-        probs = torch.softmax(logits.view(-1, self.num_experts_per_z), dim=-1).view_as(logits) # (s,e)
-        layer_probs = torch.softmax(self.layer_logits, dim=-1) # l,z
-        layer_probs_of_current_layer = layer_probs[self.layer_idx]
-        
-        layer_probs = layer_probs_of_current_layer.view(-1,1).expand([self.num_z, self.num_experts_per_z]).view(1, -1)
-        assert layer_probs.shape[-1] == self.num_experts
-        probs = probs * layer_probs # (s,e) * (1,e)
-        assert torch.all(torch.sum(probs, dim=-1) == 1.0)
+        if self.layer_gate_type == 'product':
+            probs = torch.softmax(logits.view(logits.shape[0], self.num_z, self.num_experts_per_z), dim=-1)
+            # (s,z,e/z) (z) -> (s,z,e/z) -> (s,e)
+            probs = torch.einsum('szx,z->szx', probs, layer_probs).reshape(-1, self.num_experts)
+            # assert torch.allclose(torch.sum(probs, dim=-1), torch.ones(probs.shape[0]).type_as(probs)), torch.sum(probs, dim=-1)[:10]
+        elif self.layer_gate_type == 'add':
+            # in fact it may not be necessary, since it is just a bias. the layer norm has bias.
+            logits += self.layer_logits.unsqueeze(dim=0)
+            probs = torch.softmax(logits, dim=-1) # (s,e)
+        else:
+            probs = torch.softmax(logits, dim=-1) # (s,e)
 
         if self.k == 1:
             l_aux, combine_weights, dispatch_mask, metadata = top1gating(probs, self.capacity_factor if self.training else self.eval_capacity_factor,
                                      self.min_capacity, used_token, self.noisy_gate_policy if self.training else None,
                                      self.drop_tokens, self.use_rts, use_tutel, aux_loss_weight=self.aux_loss_weight, return_gates=False)
-            if self.layer_idx == 0:
-                layer_balanced_loss = self.aux_loss_weight['layer_balanced_loss'] * AuxLoss.get_auxloss(layer_probs)
-            metadata['layer_balanced_loss'] = layer_balanced_loss.detach()
-            l_aux += layer_balanced_loss
+            metadata[f'layer{self.layer_idx}_gates_histgram'] = Multinomial(self.num_experts, layer_probs).sample()
         else:
             raise NotImplementedError
-            gate_output = top2gating(logits, self.capacity_factor if self.training else self.eval_capacity_factor,
-                                     self.min_capacity, aux_loss_weight=self.aux_loss_weight)
 
         if self.wall_clock_breakdown:
             self.timers('TopKGate').stop()
             self.gate_time = self.timers('TopKGate').elapsed(reset=False)
 
         return l_aux, combine_weights, dispatch_mask, metadata
-
 
 def top1gating(gates: Tensor,
                capacity_factor: float,
@@ -137,7 +144,7 @@ def top1gating(gates: Tensor,
 
     # Create a mask for 1st's expert per token
     # noisy gating
-    indices1_s = torch.argmax(gates)
+    indices1_s = torch.argmax(gates, dim=1)
     num_experts = int(gates.shape[1])
     mask1 = F.one_hot(indices1_s, num_classes=num_experts)
 
