@@ -402,11 +402,20 @@ class NeoXArgsModel(NeoXArgsTemplate):
     moe_aux_loss_weight: dict = None
 
     moe_share_layers: dict = None
+    """
+    parameters in the dict are:
+    - group_size: the size of group of layers that share parameters with each other, default is 1.
+     Only share parameters inside a group. If group_size=1, then all layers are not shared. 
+     If group_size=num_layers, then all layers are shared. So the larger the group_size is, 
+     the more parameters are shared.
+    """
 
     from_dense_to_moe: dict = None
 
     moe_use_elbo: bool = False
     # choices: "zero", "from_dense_single_layer", "from_dense_all_layers", "no"
+
+    hier_moe: bool = False
 
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):
