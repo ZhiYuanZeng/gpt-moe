@@ -25,7 +25,7 @@
   "activation": "silu",
 
   # finetuning option
-  "finetune": true,
+  "finetune": false,
 
    # init methods
    "init_method": "small_init",
