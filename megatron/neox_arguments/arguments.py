@@ -573,15 +573,6 @@ class NeoXArgs(*BASE_CLASSES):
         )
         args_list.append(json.dumps(neox_args))
         return args_list
-    
-    def get_main_args(self):
-        args_list = []
-        args_list.append("--megatron_config")
-        neox_args = self.get_parent_class_value_dict(
-            *self.__class__.__bases__, only_non_defaults=True
-        )
-        args_list.append(json.dumps(neox_args))
-        return args_list
 
     ############################################################################################################################
     # start of calculated properties
@@ -775,8 +766,8 @@ class NeoXArgs(*BASE_CLASSES):
     def calculate_batch_parameters(
         dp_world_size, train_batch=None, micro_batch=None, grad_acc=None
     ):
-        print_rank_0('before trasformation:............................')
-        print_rank_0(train_batch, micro_batch, grad_acc)
+        # print_rank_0('before trasformation:............................')
+        # print_rank_0(train_batch, micro_batch, grad_acc)
         
         # all values are provided nothing needs to be set
         if train_batch is not None and micro_batch is not None and grad_acc is not None:
@@ -812,8 +803,8 @@ class NeoXArgs(*BASE_CLASSES):
             assert (
                 False
             ), "Either train_batch_size or train_micro_batch_size_per_gpu needs to be provided"
-        print_rank_0('after trasformation:............................')
-        print_rank_0(train_batch, micro_batch, grad_acc)
+        # print_rank_0('after trasformation:............................')
+        # print_rank_0(train_batch, micro_batch, grad_acc)
         return int(train_batch), int(micro_batch), int(grad_acc)
 
     @staticmethod
