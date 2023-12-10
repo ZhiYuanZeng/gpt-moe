@@ -57,7 +57,7 @@ from megatron.utils import (
 from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
-from from_dense_to_moe import transform, set_moe_args
+from tools.ckpts.from_dense_to_moe import transform, dense_args_to_moe_args
 import math
 import functools
 from collections import defaultdict
@@ -713,22 +713,6 @@ def get_learning_rate_scheduler(optimizer, neox_args):
 
     return lr_scheduler
 
-def check_forward(dense_model, moe_model):
-    input_ids1 = torch.randint(size=(8,8), high=128, low=0)
-    position_ids = torch.arange(0, 8)
-    attention_mask = torch.full(size=(8,8), fill_value=False)
-    
-    param_device = next(dense_model.parameters()).device
-    input_ids1, position_ids, attention_mask = input_ids1.to(param_device), position_ids.to(param_device), attention_mask.to(param_device)
-    
-    dense_outputs = dense_model((input_ids1, position_ids, attention_mask))
-    moe_outputs = moe_model((input_ids1, position_ids, attention_mask))
-    if isinstance(moe_outputs, tuple):
-        moe_outputs = moe_outputs[0]
-    assert dense_outputs.shape == moe_outputs.shape
-    # assert torch.allclose(dense_outputs, moe_outputs), f'max distance:{torch.max(torch.abs(dense_outputs - moe_outputs))}'
-
-
 def setup_optim(model, neox_args):
     optimizer, param_groups = get_optimizer(model=model, neox_args=neox_args)
     lr_scheduler = get_learning_rate_scheduler(optimizer=optimizer, neox_args=neox_args)
@@ -788,8 +772,6 @@ def setup_optim(model, neox_args):
 
 def setup_model_and_optimizer(neox_args, use_cache=False):
     """Setup model and optimizer."""
-    if neox_args.load_iteration is not None and neox_args.load_iteration != 0 and neox_args.from_dense_to_moe:
-        neox_args = set_moe_args(neox_args)
     model = get_model(neox_args=neox_args, use_cache=use_cache)
     model, optimizer, lr_scheduler = setup_optim(model, neox_args) 
     if neox_args.load is not None:
@@ -804,13 +786,6 @@ def setup_model_and_optimizer(neox_args, use_cache=False):
             f"Loading checkpoint and starting from iteration {neox_args.iteration}"
         )
         torch.distributed.barrier()
-        # assert neox_args.from_dense_to_moe
-        if neox_args.load_iteration is None and neox_args.from_dense_to_moe:
-            moe_model = transform(model, neox_args, build_model_func=get_model)
-            moe_model, moe_optimizer, moe_lr_scheduler = setup_optim(moe_model, neox_args)
-            check_forward(model, moe_model)
-            model, optimizer, lr_scheduler = moe_model, moe_optimizer, moe_lr_scheduler
-            print_rank_0('Transformed the pretrained dense mode to an moe model')
     else:
         neox_args.iteration = 0
 
@@ -1173,6 +1148,13 @@ def evaluate_and_print_results(
         if isinstance(v, dict):
             for k2, v2 in v.items():
                 k3 = "_".join([k, k2])
+
+                if isinstance(v2, torch.Tensor):
+                    if v2.numel() != 1:
+                        continue
+                    else:
+                        v2 = v2.item()
+
                 string += f"{k3} value: {v2:.6E} | "
                 tb_wandb_log(
                     f"{chart_name}/{k3}",
@@ -1182,8 +1164,12 @@ def evaluate_and_print_results(
                     tensorboard_writer=neox_args.tensorboard_writer,
                 )
         else:
-            if isinstance(v, torch.Tensor) and v.numel() > 1:
-                continue
+            if isinstance(v, torch.Tensor):
+                if v.numel() != 1:
+                    continue
+                else:
+                    v = v.item()
+            
             string += f"{k} value: {v:.6E} | "
             tb_wandb_log(
                 f"{chart_name}/{k}",
