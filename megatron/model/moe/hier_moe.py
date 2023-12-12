@@ -1,4 +1,3 @@
-from megatron import print_rank_0, print_rank
 from deepspeed.moe.layer import MoE, MOELayer, TopKGate
 from deepspeed.moe.sharded_moe import (
     Any,
@@ -26,6 +25,7 @@ from torch import Tensor
 from torch.distributions import Multinomial
 from torch.nn import Module
 import copy
+from deepspeed.utils.logging import log_dist 
 
 class HierMoE(MoE):
     """
@@ -59,7 +59,7 @@ class HierMoE(MoE):
             experts = Experts(expert, self.num_local_experts, self.expert_group_name)
         crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor,
                                                min_capacity, noisy_gate_policy, drop_tokens, use_rts, aux_loss_weight=aux_loss_weight)
-        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight)
+        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, expert_group_name=self.expert_group_name)
         
         self.deepspeed_moe = HierMoELayer(crossgpu_gate,
                                       insidegpu_gate,
@@ -77,7 +77,7 @@ class Experts(torch.nn.Module):
 
         self.deepspeed_experts = torch.nn.ModuleList([copy.deepcopy(expert) for i in range(num_local_experts)])
         self.num_local_experts = num_local_experts
-
+        
         # TODO: revisit allreduce for moe.gate...
         for expert in self.deepspeed_experts:
             # TODO: Create param groups to handle expert + data case (e.g. param.group = moe_group)
@@ -85,19 +85,17 @@ class Experts(torch.nn.Module):
                 param.allreduce = False
                 param.group_name = expert_group_name
 
-    def forward(self, inputs, input_split=None):
-        if input_split is None:
-            chunks = torch.split(inputs, split_size_or_sections = 1, dim=1)
-            assert len(chunks) == self.num_local_experts
-        else:
-            assert isinstance(input_split, list)
-            chunks = torch.split(inputs, split_size_or_sections = input_split, dim=1)
+    def forward(self, inputs, input_split):
+        assert isinstance(input_split, list)
+        chunks = torch.split(inputs, split_size_or_sections = input_split, dim=0)
+        assert len(chunks) == len(self.deepspeed_experts)
         expert_outputs = []
         skip_expert_outputs = 0.
+        # log_dist(input_split)
         for chunk, expert in zip(chunks, self.deepspeed_experts):
             try:
                 skip_expert = False
-                if chunk.shape[1] == 0:
+                if chunk.shape[0] == 0:
                     skip_expert = True
                     chunk = torch.zeros((1, inputs.shape[-1]), dtype=inputs.dtype, device=inputs.device)
                 out = expert(chunk)
@@ -111,7 +109,7 @@ class Experts(torch.nn.Module):
             else:
                 expert_outputs += [out]
         assert skip_expert_outputs == 0 or skip_expert_outputs.item() == 0
-        expert_output = torch.cat(expert_outputs, dim=1) + skip_expert_outputs
+        expert_output = torch.cat(expert_outputs, dim=0) + skip_expert_outputs
         assert expert_output.shape == inputs.shape
         return expert_output
 
@@ -239,14 +237,11 @@ class HierMoELayer(MOELayer):
         
         dispatched_input = reshaped_input[sort_indices]
 
-        # Re-shape after all-to-all: ecm -> gecm
-        dispatched_input = dispatched_input.reshape(1, -1, d_model)
-
         # expert_output = dispatched_input
         expert_output = self.experts(dispatched_input, input_splits)
-        expert_output = expert_output.reshape(-1, d_model)
-        combined_output = expert_output[reversed_ordering]
-        combined_output = expert_output * combined_weights.unsqueeze(dim=-1)
+        
+        recovered_expert_output = expert_output[reversed_ordering]
+        combined_output = recovered_expert_output * combined_weights.unsqueeze(dim=-1)
         if self.insidegpu_gate.k > 1:
             combined_output = combined_output.reshape(-1, self.insidegpu_gate.k, d_model).sum(dim=1)
 
@@ -269,9 +264,10 @@ class LocalGate(torch.nn.Module):
                  model_dim: int,
                  num_experts: int,
                  aux_loss_weight: dict,
+                 expert_group_name,
                  k: int = 1):
         super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False).float()
+        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False).float() 
         self.num_experts = num_experts
         self.k = k
         self.aux_loss_weight = aux_loss_weight
@@ -302,7 +298,7 @@ class LocalGate(torch.nn.Module):
             else:
                 combine_weights = topk_probs
             combine_weights = combine_weights.view(-1).type_as(inputs)
-            aux_loss_weight = self.aux_loss_weight
+            # aux_loss_weight = self.aux_loss_weight
             # l_aux, loss_metadata = AuxLoss.get_auxloss(probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
             # loss_metadata = {'local_' + key: value for key, value in loss_metadata.items()}
             assert input_splits.sum() == len(sort_ordering)
