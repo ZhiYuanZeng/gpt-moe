@@ -35,7 +35,7 @@ class HierMoE(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, gate_st=False):
         super(HierMoE, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -53,22 +53,32 @@ class HierMoE(MoE):
             enable_expert_tensor_parallelism=enable_expert_tensor_parallelism, 
             aux_loss_weight=aux_loss_weight,
             use_elbo=use_elbo,
-            experts=experts)
+            experts=experts,
+            gate_st=gate_st)
         
         if experts is None:
             experts = Experts(expert, self.num_local_experts, self.expert_group_name)
-        crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor,
-                                               min_capacity, noisy_gate_policy, drop_tokens, use_rts, aux_loss_weight=aux_loss_weight)
-        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, expert_group_name=self.expert_group_name)
+        crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
+                                  use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
+        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
         
-        self.deepspeed_moe = HierMoELayer(crossgpu_gate,
-                                      insidegpu_gate,
-                                      experts,
-                                      self.expert_group_name,
-                                      self.ep_size,
-                                      self.num_local_experts,
-                                      use_tutel=use_tutel,
-                                      use_elbo=use_elbo)
+        if ep_size != 1:
+            self.deepspeed_moe = HierMoELayer(crossgpu_gate,
+                                        insidegpu_gate,
+                                        experts,
+                                        self.expert_group_name,
+                                        self.ep_size,
+                                        self.num_local_experts,
+                                        use_tutel=use_tutel,
+                                        use_elbo=use_elbo)
+        else:
+            self.deepspeed_moe = LocalMoELayer(insidegpu_gate,
+                                        experts,
+                                        self.expert_group_name,
+                                        self.ep_size,
+                                        self.num_local_experts,
+                                        use_tutel=use_tutel,
+                                        use_elbo=use_elbo)
 
 class Experts(torch.nn.Module):
 
@@ -87,6 +97,7 @@ class Experts(torch.nn.Module):
 
     def forward(self, inputs, input_split):
         assert isinstance(input_split, list)
+        assert len(inputs.shape) == 2
         chunks = torch.split(inputs, split_size_or_sections = input_split, dim=0)
         assert len(chunks) == len(self.deepspeed_experts)
         expert_outputs = []
@@ -119,7 +130,6 @@ class HierMoELayer(MOELayer):
         self.insidegpu_gate = insidegpu_gate
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
-
         if self.wall_clock_breakdown:
             self.timers('cross-moe').start()
 
@@ -252,7 +262,32 @@ class HierMoELayer(MOELayer):
             self.time_moe = self.timers('local_moe').elapsed(reset=False)
 
         return a, inside_probs
+
+class LocalMoELayer(HierMoELayer):
+    def __init__(self, insidegpu_gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
+        super(HierMoELayer, self).__init__(insidegpu_gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel=use_tutel, use_elbo=use_elbo)
+        assert self.num_local_experts != 1
     
+    @property
+    def insidegpu_gate(self):
+        return self.gate
+
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        if self.wall_clock_breakdown:
+            self.timers('local-moe').start()
+        x = input[0]
+        expert_output, probs = self.local_moe(x)
+        mask = F.one_hot(probs.argmax(dim=-1), num_classes=probs.shape[-1])
+        aux_loss_weight = self.gate.aux_loss_weight
+        self.l_aux, self.exp_counts =  AuxLoss.get_auxloss(probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
+        
+        if self.wall_clock_breakdown:
+            self.timers('local-moe').stop()
+            self.time_moe = self.timers('local-moe').elapsed(reset=False)
+         
+        return expert_output
+
+
 def reverse_sort(order):
     # Creates an index that undoes a sort: xs==xs[order][inverse_sort(order)]
     return torch.empty_like(order).scatter_(
@@ -264,13 +299,14 @@ class LocalGate(torch.nn.Module):
                  model_dim: int,
                  num_experts: int,
                  aux_loss_weight: dict,
-                 expert_group_name,
+                 gate_st,
                  k: int = 1):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False).float() 
         self.num_experts = num_experts
         self.k = k
         self.aux_loss_weight = aux_loss_weight
+        self.gate_st = gate_st
 
     def forward(self,
                 inputs: torch.Tensor) -> Tuple[Tensor, Tensor, list, Tensor, Tensor]:  # type: ignore
@@ -298,6 +334,8 @@ class LocalGate(torch.nn.Module):
             else:
                 combine_weights = topk_probs
             combine_weights = combine_weights.view(-1).type_as(inputs)
+            if self.gate_st:
+                combine_weights = combine_weights-combine_weights.detach() + 1
             # aux_loss_weight = self.aux_loss_weight
             # l_aux, loss_metadata = AuxLoss.get_auxloss(probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
             # loss_metadata = {'local_' + key: value for key, value in loss_metadata.items()}
