@@ -57,7 +57,6 @@ from megatron.utils import (
 from megatron.model.criterion import cross_entropy
 from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
-from tools.ckpts.from_dense_to_moe import transform, dense_args_to_moe_args
 import math
 import functools
 from collections import defaultdict

@@ -30,7 +30,7 @@ main_args = neox_args.get_main_args()
 wandb_token = get_wandb_api_key(neox_args=neox_args)
 if wandb_token is not None:
     os.environ["WANDB_API_KEY"] = wandb_token
-if neox_args.from_dense_to_moe:
+if neox_args.from_dense_to_moe and neox_args.from_dense_to_moe['do_convert']:
     dense_to_moe_main(main_args)
 else:
     main(main_args)
