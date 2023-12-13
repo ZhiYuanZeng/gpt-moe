@@ -60,7 +60,8 @@ class HierMoE(MoE):
             experts = Experts(expert, self.num_local_experts, self.expert_group_name)
         crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
                                   use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
-        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
+        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, \
+                                   gate_st=gate_st, expert_group_name=self.expert_group_name)
         
         if ep_size != 1:
             self.deepspeed_moe = HierMoELayer(crossgpu_gate,
@@ -98,21 +99,23 @@ class Experts(torch.nn.Module):
     def forward(self, inputs, input_split):
         assert isinstance(input_split, list)
         assert len(inputs.shape) == 2
+
         chunks = torch.split(inputs, split_size_or_sections = input_split, dim=0)
         assert len(chunks) == len(self.deepspeed_experts)
+        
         expert_outputs = []
         skip_expert_outputs = 0.
-        # log_dist(input_split)
-        for chunk, expert in zip(chunks, self.deepspeed_experts):
+        for i, (chunk, expert) in enumerate(zip(chunks, self.deepspeed_experts)):
+            assert chunk.shape[0] == input_split[i]
+            skip_expert = False
             try:
-                skip_expert = False
                 if chunk.shape[0] == 0:
                     skip_expert = True
                     chunk = torch.zeros((1, inputs.shape[-1]), dtype=inputs.dtype, device=inputs.device)
                 out = expert(chunk)
-
             except Exception:
                 raise RuntimeError(f"the chunk size is : {chunk.shape}")
+            
             if type(out) is tuple:
                 out = out[0]  # Ignore the bias term for now
             if skip_expert:
@@ -247,11 +250,11 @@ class HierMoELayer(MOELayer):
         
         dispatched_input = reshaped_input[sort_indices]
 
-        # expert_output = dispatched_input
         expert_output = self.experts(dispatched_input, input_splits)
-        
         recovered_expert_output = expert_output[reversed_ordering]
+
         combined_output = recovered_expert_output * combined_weights.unsqueeze(dim=-1)
+
         if self.insidegpu_gate.k > 1:
             combined_output = combined_output.reshape(-1, self.insidegpu_gate.k, d_model).sum(dim=1)
 
@@ -287,7 +290,6 @@ class LocalMoELayer(HierMoELayer):
          
         return expert_output
 
-
 def reverse_sort(order):
     # Creates an index that undoes a sort: xs==xs[order][inverse_sort(order)]
     return torch.empty_like(order).scatter_(
@@ -300,6 +302,7 @@ class LocalGate(torch.nn.Module):
                  num_experts: int,
                  aux_loss_weight: dict,
                  gate_st,
+                 expert_group_name,
                  k: int = 1):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False).float() 
@@ -307,10 +310,18 @@ class LocalGate(torch.nn.Module):
         self.k = k
         self.aux_loss_weight = aux_loss_weight
         self.gate_st = gate_st
+        for param in self.wg.parameters():
+            param.allreduce = False
+            param.group_name = expert_group_name
+
 
     def forward(self,
                 inputs: torch.Tensor) -> Tuple[Tensor, Tensor, list, Tensor, Tensor]:  # type: ignore
-            logits = self.wg(inputs)
+            if self.wg.weight.dtype != torch.float32:
+                self.wg = self.wg.float()
+            input_fp32 = inputs.float()
+                
+            logits = self.wg(input_fp32)
             probs = torch.softmax(logits, dim=-1)
             topk_probs, topk_indices = torch.topk(probs, dim=-1, k=self.k, largest=True)
             topk_indices = topk_indices.view(-1) # indices of expected experts for each token
