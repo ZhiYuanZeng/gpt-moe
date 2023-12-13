@@ -1,24 +1,13 @@
 from deepspeed.moe.layer import MoE, MOELayer, TopKGate, Experts
 from deepspeed.moe.sharded_moe import (
     Any,
-    multiplicative_jitter, 
     Optional, 
     Tensor, 
     Tuple, 
-    exp_selection_uniform_map,
-    _capacity,
-    _one_hot_to_float,
-    einsum,
-    # tutel_moe,
-    _top_idx,
-    AuxLoss,
-    dist,
-    math,
-    F
 )
-import torch
 from torch import Tensor
-
+from torch.nn import Module
+import torch
 class MoeFromDense(MoE):
     """
     the moe-from-dense model should be identical with the dense model at the beginning of the training
@@ -28,7 +17,7 @@ class MoeFromDense(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, debug=False, **kwargs):
         super(MoeFromDense, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -46,7 +35,8 @@ class MoeFromDense(MoE):
             enable_expert_tensor_parallelism=enable_expert_tensor_parallelism, 
             aux_loss_weight=aux_loss_weight,
             use_elbo=use_elbo,
-            experts=experts)
+            experts=experts,
+)
         
         experts = self.deepspeed_moe.experts # reused created experts to save memory
         GATE_CLS = MoEFromDenseGate
@@ -58,11 +48,16 @@ class MoeFromDense(MoE):
                                       self.ep_size,
                                       self.num_local_experts,
                                       use_tutel=use_tutel,
-                                      use_elbo=use_elbo)
+                                      use_elbo=use_elbo,
+                                      debug=debug)
     
-    def set_mode(self, mode):
-        assert mode in ('dense', 'moe')
-        self.deepspeed_moe.set_mode(mode)
+
+class MoeFromDenseDebug(MoeFromDense):
+    def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, aux_loss_weight: dict = None, use_elbo=False, experts=None, debug=False, **kwargs):
+        drop_tokens = False
+        super().__init__(hidden_size, expert, num_experts, ep_size, k, capacity_factor, eval_capacity_factor, 
+                         min_capacity, use_residual, noisy_gate_policy, drop_tokens, use_rts, use_tutel, 
+                         enable_expert_tensor_parallelism, aux_loss_weight, use_elbo, experts, debug=True, **kwargs)
 
 class MoEFromDenseGate(TopKGate):
     def forward(self, input: Tensor, used_token: Tensor = None, use_tutel: bool = False, return_gates=False) -> Tuple[Tensor, Tensor, Tensor]:
@@ -72,11 +67,14 @@ class MoEFromDenseGate(TopKGate):
         return l_aux, combine_weights, dispatch_mask, metadata
     
 class MoEFromDenseLayer(MOELayer):
-    def set_mode(self, mode):
-        self.mode = mode
+    def __init__(self, gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False, debug=False) -> None:
+        super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo)
+        self.debug = debug
 
-    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
-        if getattr(self, 'mode', 'moe') == 'dense':
-            return self.experts[0](input[0])
-        else:
-            return super().forward(*input, **kwargs)
+    # def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+    #     if self.debug:
+    #         self.l_aux = torch.tensor(0.).type_as(input[0])
+    #         self.exp_counts = {}
+    #         return self.experts.deepspeed_experts[1](input[0])[0]
+    #     else:
+    #         return super().forward(*input, **kwargs)
