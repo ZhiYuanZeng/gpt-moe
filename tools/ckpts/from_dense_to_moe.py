@@ -21,6 +21,7 @@ def copy_param(copy_from:List[nn.Module], copy_to:List[nn.Module]):
     for cf, ct in zip(copy_from, copy_to):
         for p1,p2 in zip(cf.parameters(), ct.parameters()):
             assert p1.data.shape == p2.data.shape
+            assert getattr(p2, 'is_from_dense', False) == False # no duplicated copy
             p2.data = torch.from_numpy(p1.data.cpu().numpy()).type_as(p2.data)
             p2.is_from_dense = True
 
@@ -52,71 +53,29 @@ def copy_layer_norm(copy_from:nn.Module, copy_to:nn.Module):
 def is_moe_layer(layer):
     return getattr(layer, 'is_moe_layer', False)
 
-def iterate_ffn_layers(model):
+def iterate_ffns(model):
     modules = iterate_submodules(model)
-
+    
     ffn_modules = []
     
     for module in modules:
         if isinstance(module, ParallelTransformerLayer):
-            ffn_modules.append(module)
-    return ffn_modules
+            if isinstance(module, MoEParallelTransformerLayer):
+                ffn_modules.append(module.experts.deepspeed_experts)
+            else:
+                ffn_modules.append(module.mlp)
+    return ffn_modules    
 
-def copy_shared_ffn(copy_from:nn.Module, copy_to:nn.Module):
-    source_ffn_modules, target_ffn_modules = iterate_ffn_layers(copy_from), iterate_ffn_layers(copy_to)
+def copy_ffn(copy_from:nn.Module, copy_to:nn.Module):
+    source_ffn_modules, target_ffn_modules = iterate_ffns(copy_from), iterate_ffns(copy_to)
     assert len(source_ffn_modules) == len(target_ffn_modules)
-    nonmoe_source_ffn_modules = []
-    nonmoe_target_ffn_modules = []
-    for s_module, t_module in zip(source_ffn_modules, target_ffn_modules):
-        if not is_moe_layer(t_module):
-            nonmoe_source_ffn_modules.append(s_module.mlp)
-            nonmoe_target_ffn_modules.append(t_module.mlp)
-    print_rank_0(f'there are {len(source_ffn_modules)} ffn layers, {len(nonmoe_source_ffn_modules)} ffn layers are shared ffn layers')
-    copy_param(nonmoe_source_ffn_modules, nonmoe_target_ffn_modules)
-
-def copy_expert_ffn(copy_from:nn.Module, copy_to:nn.Module):
-    source_ffn_modules, target_ffn_modules = iterate_ffn_layers(copy_from), iterate_ffn_layers(copy_to)
-    assert len(source_ffn_modules) == len(target_ffn_modules)
-    moe_source_ffn_modules = []
-    moe_target_ffn_modules = []
-    for s_module, t_module in zip(source_ffn_modules, target_ffn_modules):
-        if is_moe_layer(t_module):
-            moe_source_ffn_modules.append(s_module.mlp)
-            moe_target_ffn_modules.append(t_module.experts.deepspeed_experts)
-    print_rank_0(f'there are {len(source_ffn_modules)} ffn layers, {len(moe_source_ffn_modules)} ffn layers are moe ffn layers')
-    print_rank_0(f'there are {len(moe_target_ffn_modules[-1])} experts in each ep rank')
-
-    assert len(moe_target_ffn_modules) == len(moe_source_ffn_modules)
-    # assert len(moe_target_ffn_modules) <= len(moe_source_ffn_modules), f'{len(moe_source_ffn_modules)=}, {len(moe_target_ffn_modules)=}'
-    # if len(moe_source_ffn_modules) > len(moe_target_ffn_modules):
-    #     moe_source_ffn_modules = moe_source_ffn_modules[-len(moe_target_ffn_modules):]
-    for i in range(len(moe_target_ffn_modules)):
-        for e in moe_target_ffn_modules[i]: # experts is a module list 
-            copy_param([moe_source_ffn_modules[i],], [e,])
-
-def copy_expert_ffn_wt_dropout(copy_from:nn.Module, copy_to:nn.Module, random_mask_rate:float):
-    ffn_layers = [layer for layer in iterate_submodules(copy_from) if isinstance(layer, ParallelMLP)]
-    ffn_layers = [layer for i, layer in enumerate(ffn_layers) if i%2==1]
-    moe_ffn_layers = [layer.moe_layer.deepspeed_moe.experts for layer in iterate_submodules(copy_to) if isinstance(layer, MoEParallelTransformerLayer)]
-    assert len(moe_ffn_layers) % len(ffn_layers) == 0, f'{len(ffn_layers)=}, {len(moe_ffn_layers)=}'
-    num_layers_each_rank =len(moe_ffn_layers)//len(ffn_layers) # maybe num_local_experts > 1
-
-    world_size = dist.get_world_size(group=None)
-    assert world_size * num_layers_each_rank == len(ffn_layers), f'{world_size=}, {num_layers_each_rank=}, {len(ffn_layers)=}, {len(moe_ffn_layers)=}'
-    
-    for i,layer in enumerate(moe_ffn_layers):
-        ffn_layer_idx = i // num_layers_each_rank
-        src_param = ffn_layers[ffn_layer_idx]
-        mask = torch.rand(src_param.size()) > random_mask_rate
-        mask = mask.float()
-        copy_param([src_param*mask,], [layer,])
-
-def copy_shared_params(copy_from:nn.Module, copy_to:nn.Module):
-    copy_attention(copy_from, copy_to)
-    copy_shared_ffn(copy_from, copy_to)
-    copy_layer_norm(copy_from, copy_to)
-    copy_embedding(copy_from, copy_to)
-    copy_final_linear(copy_from, copy_to)
+    print_rank_0(f'there are {len(source_ffn_modules)} ffn modules to be shared')
+    for s,t in zip(source_ffn_modules, target_ffn_modules):
+        if isinstance(t, torch.nn.ModuleList): # experts
+            for _t in t:
+                copy_param([s,], [_t])
+        else:
+            copy_param([s,], [t,])
 
 def check_copied_params(model):
     from_dense_params = []
@@ -139,20 +98,21 @@ def zero_expert(model):
             nn.init.zeros_(p)
 
 def check_forward(dense_model, moe_model):
-    input_ids1 = torch.randint(size=(8,8), high=128, low=0)
-    position_ids = torch.arange(0, 8)
-    attention_mask = torch.full(size=(8,8), fill_value=False)
-    
-    param_device = next(dense_model.parameters()).device
-    input_ids1, position_ids, attention_mask = input_ids1.to(param_device), position_ids.to(param_device), attention_mask.to(param_device)
-    
-    dense_outputs = dense_model((input_ids1, position_ids, attention_mask))
-    moe_outputs = moe_model((input_ids1, position_ids, attention_mask))
-    if isinstance(moe_outputs, tuple):
-        moe_outputs = moe_outputs[0]
-    assert dense_outputs.shape == moe_outputs.shape
-    assert torch.allclose(dense_outputs, moe_outputs), f'max distance:{torch.max(torch.abs(dense_outputs - moe_outputs))}'
-    print_rank_0('#'*10 + ' from dense to moe successful! ' + '#'*10)
+    with torch.no_grad():
+        input_ids1 = torch.randint(size=(8,8), high=128, low=0)
+        position_ids = torch.arange(0, 8)
+        attention_mask = torch.full(size=(8,8), fill_value=False)
+        
+        param_device = next(dense_model.parameters()).device
+        input_ids1, position_ids, attention_mask = input_ids1.to(param_device), position_ids.to(param_device), attention_mask.to(param_device)
+        
+        dense_outputs = dense_model((input_ids1, position_ids, attention_mask))
+        moe_outputs = moe_model((input_ids1, position_ids, attention_mask))
+        if isinstance(moe_outputs, tuple):
+            moe_outputs = moe_outputs[0]
+        assert dense_outputs.shape == moe_outputs.shape
+        assert torch.allclose(dense_outputs, moe_outputs), f'max distance:{torch.max(torch.abs(dense_outputs - moe_outputs))}'
+        print_rank_0('#'*10 + ' from dense to moe successful! ' + '#'*10)
 
 
 def copy_dense_params_to_moe(dense_model, moe_model, moe_args, expert_init):
@@ -160,7 +120,13 @@ def copy_dense_params_to_moe(dense_model, moe_model, moe_args, expert_init):
     print_rank_0(f'{expert_init=}')
     print_rank_0('#'*40)
 
-    copy_shared_params(dense_model, moe_model) # attention, layernorm and half of ffns
+    copy_attention(dense_model, moe_model)
+    copy_layer_norm(dense_model, moe_model)
+    copy_embedding(dense_model, moe_model)
+    copy_final_linear(dense_model, moe_model)
+    copy_ffn(dense_model, moe_model)
+
+    # copy_shared_params(dense_model, moe_model) # attention, layernorm and half of ffns
 
     # if expert_init == 'copy_and_share_moe_layers':
     #     raise NotImplementedError   
