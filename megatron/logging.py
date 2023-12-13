@@ -392,7 +392,7 @@ def tb_wandb_log(
         try:
             if tensorboard_writer:
                 if isinstance(value, torch.Tensor) and value.numel() > 1:
-                    tensorboard_writer.add_histogram(key, value+iteration_no, iteration_no)
+                    tensorboard_writer.add_histogram(key, value, iteration_no)
                 else:
                     tensorboard_writer.add_scalar(key, value, iteration_no)
             if use_wandb:
