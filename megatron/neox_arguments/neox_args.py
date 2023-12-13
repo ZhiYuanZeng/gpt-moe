@@ -417,6 +417,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     hier_moe: bool = False
 
+    moe_gate_st:bool = True
+
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):
     """

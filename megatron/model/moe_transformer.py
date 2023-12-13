@@ -30,7 +30,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         noisy_gate_policy=neox_args.moe_noisy_gate_policy,
                         aux_loss_weight=neox_args.moe_aux_loss_weight,
                         use_elbo=neox_args.moe_use_elbo,
-                        experts=experts)
+                        experts=experts,
+                        gate_st=neox_args.moe_gate_st)
         assert neox_args.moe_aux_loss_weight is not None 
         print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
