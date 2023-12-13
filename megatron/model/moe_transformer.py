@@ -161,9 +161,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                     )
 
             # output = x + mlp(ln2(x))
-            attention_output = self.post_attention_layernorm(attention_output)
             expert_output, l_aux, metadata = self.moe_layer(
-                attention_output
+                self.post_attention_layernorm(attention_output)
             )
             mlp_output = expert_output
             with torch.enable_grad():
