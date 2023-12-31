@@ -18,8 +18,9 @@ from deepspeed.moe.sharded_moe import (
     groups,
     _AllToAll,
     drop_tokens,
-    gather_tokens
+    gather_tokens,
 )
+from deepspeed.moe.experts import Experts
 import torch
 from torch import Tensor
 from torch.distributions import Multinomial
@@ -57,7 +58,9 @@ class HierMoE(MoE):
             gate_st=gate_st)
         
         if experts is None:
-            experts = Experts(expert, self.num_local_experts, self.expert_group_name)
+            experts = LocalExperts(expert, self.num_local_experts, self.expert_group_name)
+        else:
+            experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
         crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
                                   use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
         insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, \
@@ -81,14 +84,21 @@ class HierMoE(MoE):
                                         use_tutel=use_tutel,
                                         use_elbo=use_elbo)
 
-class Experts(torch.nn.Module):
+class LocalExperts(torch.nn.Module):
+    @classmethod
+    def from_existing_experts(cls, experts: Experts, expert_group_name):
+        return cls(expert_group_name=expert_group_name, existing_experts = experts.deepspeed_experts)
 
-    def __init__(self, expert, num_local_experts=1, expert_group_name=None):
-        super(Experts, self).__init__()
+    def __init__(self, expert=None, num_local_experts=1, expert_group_name=None, existing_experts=None):
+        super(LocalExperts, self).__init__()
 
-        self.deepspeed_experts = torch.nn.ModuleList([copy.deepcopy(expert) for i in range(num_local_experts)])
-        self.num_local_experts = num_local_experts
-        
+        if expert is not None:
+            self.deepspeed_experts = torch.nn.ModuleList([copy.deepcopy(expert) for i in range(num_local_experts)])
+            self.num_local_experts = num_local_experts
+        else:
+            assert existing_experts is not None and isinstance(existing_experts, torch.nn.ModuleList)
+            self.deepspeed_experts = existing_experts
+            self.num_local_experts = len(self.deepspeed_experts)
         # TODO: revisit allreduce for moe.gate...
         for expert in self.deepspeed_experts:
             # TODO: Create param groups to handle expert + data case (e.g. param.group = moe_group)
@@ -96,7 +106,23 @@ class Experts(torch.nn.Module):
                 param.allreduce = False
                 param.group_name = expert_group_name
 
+    def _forward_with_chunks(self, inputs):
+        chunks = inputs.chunk(self.num_local_experts, dim=0)
+        expert_outputs = []
+        for chunk, expert in zip(chunks, self.deepspeed_experts):
+            out = expert(chunk)
+            if type(out) is tuple:
+                out = out[0]  # Ignore the bias term for now
+            expert_outputs += [out]
+
+        expert_output = torch.cat(expert_outputs, dim=0)
+        return expert_output
+
+
     def forward(self, inputs, input_split):
+        if input_split is None:
+            return self._forward_with_chunks(inputs)
+        
         assert isinstance(input_split, list)
         assert len(inputs.shape) == 2
 
@@ -276,17 +302,11 @@ class LocalMoELayer(HierMoELayer):
         return self.gate
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
-        if self.wall_clock_breakdown:
-            self.timers('local-moe').start()
         x = input[0]
         expert_output, probs = self.local_moe(x)
         mask = F.one_hot(probs.argmax(dim=-1), num_classes=probs.shape[-1])
         aux_loss_weight = self.gate.aux_loss_weight
         self.l_aux, self.exp_counts =  AuxLoss.get_auxloss(probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
-        
-        if self.wall_clock_breakdown:
-            self.timers('local-moe').stop()
-            self.time_moe = self.timers('local-moe').elapsed(reset=False)
          
         return expert_output
 
@@ -347,8 +367,5 @@ class LocalGate(torch.nn.Module):
             combine_weights = combine_weights.view(-1).type_as(inputs)
             if self.gate_st:
                 combine_weights = combine_weights-combine_weights.detach() + 1
-            # aux_loss_weight = self.aux_loss_weight
-            # l_aux, loss_metadata = AuxLoss.get_auxloss(probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
-            # loss_metadata = {'local_' + key: value for key, value in loss_metadata.items()}
             assert input_splits.sum() == len(sort_ordering)
             return sort_ordering, reversed_ordering, combine_weights, input_splits.tolist(), probs
