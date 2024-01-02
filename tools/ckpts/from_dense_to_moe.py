@@ -126,29 +126,6 @@ def copy_dense_params_to_moe(dense_model, moe_model, moe_args, expert_init):
     copy_final_linear(dense_model, moe_model)
     copy_ffn(dense_model, moe_model)
 
-    # copy_shared_params(dense_model, moe_model) # attention, layernorm and half of ffns
-
-    # if expert_init == 'copy_and_share_moe_layers':
-    #     raise NotImplementedError   
-    # elif expert_init == "copy":
-    #     copy_expert_ffn(dense_model, moe_model)
-    # elif expert_init == "copy_and_mask":
-    #     copy_expert_ffn_wt_dropout(dense_model, moe_model)   
-    # elif expert_init == "zero":
-    #     zero_expert(moe_model)
-    # elif expert_init == "random":
-    #     pass   
-    # else:
-    #     raise NotImplementedError('only support expert_init of (copy, copy_and_share_moe_layers, copy_and_mask, zero, ramdom)')
-    
-    # for layer in moe_model.sequential:
-    #     if getattr(layer, 'is_moe_layer', False):
-    #         layer.moe_layer.set_mode('dense')
-    # check_forward(dense_model, moe_model) # make sure the params are copied successfully
-    # for layer in moe_model.sequential:
-    #     if getattr(layer, 'is_moe_layer', False):
-    #         layer.moe_layer.set_mode('moe')
-
     return moe_model
 
 def dense_args_to_moe_args(args):

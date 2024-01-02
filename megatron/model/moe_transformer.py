@@ -4,8 +4,10 @@ import deepspeed
 import torch
 import torch.distributed as dist
 from megatron.model.moe.share_layer_moe import LayerAwareMoE
-from megatron.model.moe.moefication import MoeFromDense, MoeFromDenseDebug
+from megatron.model.moe.moefication import MoeFromDense
 from megatron.model.moe.hier_moe import HierMoE
+from megatron.model.moe.baselayer import BaseLayerMoE
+from functools import partial 
 
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
     def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False, experts = None):
@@ -13,12 +15,11 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
         if neox_args.moe_share_layers is not None and neox_args.moe_share_layers['num_z']>1:
             MOE_CLS = LayerAwareMoE
         elif neox_args.from_dense_to_moe is not None:
-            if neox_args.from_dense_to_moe.get('debug', False):
-                MOE_CLS = MoeFromDenseDebug
-            else:
-                MOE_CLS = MoeFromDense
-        elif neox_args.hier_moe:
-            MOE_CLS = HierMoE
+            MOE_CLS = partial(MoeFromDense, **neox_args.from_dense_to_moe)
+        elif neox_args.hier_moe is not None:
+            MOE_CLS = partial(HierMoE, **neox_args.hier_moe)
+        elif neox_args.moe_base_layer:
+            MOE_CLS = BaseLayerMoE
         else:
             MOE_CLS = deepspeed.moe.layer.MoE
         self.moe_layer = MOE_CLS(
