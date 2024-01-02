@@ -2,6 +2,10 @@ from deepspeed.moe.layer import MoE, MOELayer, TopKGate, Experts
 from deepspeed.moe.sharded_moe import einsum, _AllToAll
 from torch.nn import Module
 import torch
+from megatron.model.moe.baselayer import BaseLayer
+from megatron.model.moe.hier_moe import HierBalancedMoELayer, LocalGate, LocalExperts
+from deepspeed.utils.logging import log_dist
+from collections import OrderedDict
 
 class MoeFromDense(MoE):
     """
@@ -12,7 +16,7 @@ class MoeFromDense(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None, from_dense_to_moe_args=None, **kwargs):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, post=None, hier_moe=None, gate_st=False, **kwargs):
         super(MoeFromDense, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -31,12 +35,34 @@ class MoeFromDense(MoE):
             aux_loss_weight=aux_loss_weight,
             use_elbo=use_elbo,
             experts=experts,
+            gate_st=gate_st
         )
         
-        assert from_dense_to_moe_args is not None
-        if from_dense_to_moe_args['post'] == 'local':
+        assert post is None or post in ['local', 'balanced'], post
+        if post == 'local':
             self.deepspeed_moe = LocalPostMoELayer.from_moe_layer(self.deepspeed_moe)
-    
+        elif post == 'balanced':
+            self.deepspeed_moe = BalancedPostMoELayer.from_moe_layer(self.deepspeed_moe)
+        
+        if hier_moe is not None:
+            inside_k = hier_moe['inside_k']
+            if experts is None:
+                experts = LocalExperts(expert, self.num_local_experts, self.expert_group_name)
+            else:
+                experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
+            gate_st = True
+            crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
+                                  use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
+            insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=inside_k, aux_loss_weight=aux_loss_weight, \
+                                    gate_st=gate_st, expert_group_name=self.expert_group_name)
+            self.deepspeed_moe = HierBalancedMoELayer(crossgpu_gate,
+                                insidegpu_gate,
+                                experts,
+                                self.expert_group_name,
+                                self.ep_size,
+                                self.num_local_experts,
+                                use_tutel=use_tutel,
+                                use_elbo=use_elbo)
 
 def assert_all_experts_are_same(experts):
     def assert_two_modules_are_same(m1, m2):
@@ -100,8 +126,41 @@ class LocalPostMoELayer(MOELayer):
         
         # dense_outputs = self.experts(reshaped_inputs)
         # assert_close(combined_output[routed_mask], self.experts(reshaped_inputs[routed_mask]))
-        combined_output[~routed_mask] = self.experts(reshaped_inputs[~routed_mask]) # if tokens are unrouted, computed at local devices
+        combined_output[~routed_mask] = self.postprocess(reshaped_inputs[~routed_mask]) # if tokens are unrouted, computed at local devices
         
         out = combined_output.reshape(inputs[0].shape)
         
         return out
+    
+    def postprocess(self, inputs):
+        return self.experts(inputs)
+
+class BaseLayerNoStateDict(BaseLayer):
+    def state_dict(self, *args, **kwargs):
+        return OrderedDict()
+
+class BalancedPostMoELayer(LocalPostMoELayer):
+    def __init__(self, gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
+        super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo)
+    
+    def postprocess(self, inputs):
+        if not hasattr(self, 'base_layer'):
+            self.base_layer = BaseLayerNoStateDict.from_moe_layer(self)
+            self.base_layer.gate.gate_st = True
+
+        num_experts = self.gate.wg.weight.shape[0]
+        assert torch.allclose(self.base_layer.experts.deepspeed_experts[0].w1.weight, self.experts.deepspeed_experts[0].w1.weight)
+        if inputs.shape[0] < num_experts or inputs.shape[0] % num_experts != 0:
+            pad_len = num_experts - inputs.shape[0] % num_experts
+            padded_inputs = torch.cat(
+                [
+                    inputs, 
+                    torch.zeros([pad_len, inputs.shape[-1]], dtype=inputs.dtype, device=inputs.device)
+                ], dim=0
+            )
+            results =  self.base_layer(padded_inputs)
+            results = results[:-pad_len]
+        else:
+            results = self.base_layer(inputs)
+        return results
+        

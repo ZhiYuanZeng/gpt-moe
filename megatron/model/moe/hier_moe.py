@@ -1,3 +1,4 @@
+from typing import Any
 from deepspeed.moe.layer import MoE, MOELayer, TopKGate
 from deepspeed.moe.sharded_moe import (
     Any,
@@ -27,6 +28,7 @@ from torch.distributions import Multinomial
 from torch.nn import Module
 import copy
 from deepspeed.utils.logging import log_dist 
+from megatron.model.moe.baselayer import BaseLayer, inverse_sort, All2All, LocalExperts
 
 class HierMoE(MoE):
     """
@@ -36,7 +38,7 @@ class HierMoE(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None, gate_st=False):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, gate_st=False, inside_k=1):
         super(HierMoE, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -63,7 +65,7 @@ class HierMoE(MoE):
             experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
         crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
                                   use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
-        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=k, aux_loss_weight=aux_loss_weight, \
+        insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=inside_k, aux_loss_weight=aux_loss_weight, \
                                    gate_st=gate_st, expert_group_name=self.expert_group_name)
         
         if ep_size != 1:
@@ -83,75 +85,6 @@ class HierMoE(MoE):
                                         self.num_local_experts,
                                         use_tutel=use_tutel,
                                         use_elbo=use_elbo)
-
-class LocalExperts(torch.nn.Module):
-    @classmethod
-    def from_existing_experts(cls, experts: Experts, expert_group_name):
-        return cls(expert_group_name=expert_group_name, existing_experts = experts.deepspeed_experts)
-
-    def __init__(self, expert=None, num_local_experts=1, expert_group_name=None, existing_experts=None):
-        super(LocalExperts, self).__init__()
-
-        if expert is not None:
-            self.deepspeed_experts = torch.nn.ModuleList([copy.deepcopy(expert) for i in range(num_local_experts)])
-            self.num_local_experts = num_local_experts
-        else:
-            assert existing_experts is not None and isinstance(existing_experts, torch.nn.ModuleList)
-            self.deepspeed_experts = existing_experts
-            self.num_local_experts = len(self.deepspeed_experts)
-        # TODO: revisit allreduce for moe.gate...
-        for expert in self.deepspeed_experts:
-            # TODO: Create param groups to handle expert + data case (e.g. param.group = moe_group)
-            for name, param in expert.named_parameters():
-                param.allreduce = False
-                param.group_name = expert_group_name
-
-    def _forward_with_chunks(self, inputs):
-        chunks = inputs.chunk(self.num_local_experts, dim=0)
-        expert_outputs = []
-        for chunk, expert in zip(chunks, self.deepspeed_experts):
-            out = expert(chunk)
-            if type(out) is tuple:
-                out = out[0]  # Ignore the bias term for now
-            expert_outputs += [out]
-
-        expert_output = torch.cat(expert_outputs, dim=0)
-        return expert_output
-
-
-    def forward(self, inputs, input_split):
-        if input_split is None:
-            return self._forward_with_chunks(inputs)
-        
-        assert isinstance(input_split, list)
-        assert len(inputs.shape) == 2
-
-        chunks = torch.split(inputs, split_size_or_sections = input_split, dim=0)
-        assert len(chunks) == len(self.deepspeed_experts)
-        
-        expert_outputs = []
-        skip_expert_outputs = 0.
-        for i, (chunk, expert) in enumerate(zip(chunks, self.deepspeed_experts)):
-            assert chunk.shape[0] == input_split[i]
-            skip_expert = False
-            try:
-                if chunk.shape[0] == 0:
-                    skip_expert = True
-                    chunk = torch.zeros((1, inputs.shape[-1]), dtype=inputs.dtype, device=inputs.device)
-                out = expert(chunk)
-            except Exception:
-                raise RuntimeError(f"the chunk size is : {chunk.shape}")
-            
-            if type(out) is tuple:
-                out = out[0]  # Ignore the bias term for now
-            if skip_expert:
-                skip_expert_outputs += out.mean() * 0. # skipped outputs have zero grad, so the all-reduce will not be blocked
-            else:
-                expert_outputs += [out]
-        assert skip_expert_outputs == 0 or skip_expert_outputs.item() == 0
-        expert_output = torch.cat(expert_outputs, dim=0) + skip_expert_outputs
-        assert expert_output.shape == inputs.shape
-        return expert_output
 
 class HierMoELayer(MOELayer):
     def __init__(self, crossgpu_gate: Module, insidegpu_gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
@@ -291,6 +224,79 @@ class HierMoELayer(MOELayer):
             self.time_moe = self.timers('local_moe').elapsed(reset=False)
 
         return a, inside_probs
+
+class HierBalancedMoELayer(BaseLayer):
+    def __init__(self, crossgpu_gate: Module, insidegpu_gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
+        super().__init__(crossgpu_gate, experts, ep_group_name, ep_size, num_local_experts=1, use_tutel=use_tutel, use_elbo=use_elbo)
+        self.insidegpu_gate = insidegpu_gate
+    
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        features = input[0].reshape(-1, input[0].size(-1))
+        is_training = self.training
+
+        if self.shuffle and is_training:
+            # Send each token to a random worker, to break correlations within the batch
+            shuffle_sort = torch.randperm(features.size(0), device=features.device)
+            features = All2All.apply(features[shuffle_sort])
+        sort_by_expert, input_splits, output_splits, routing_probs = self.gate(features, is_training=True)
+        # Swap these tokens for the right ones for our expert
+        dispatched_input = features[sort_by_expert]
+        routed_features = All2All.apply(
+            dispatched_input, input_splits, output_splits
+        )
+        
+        if self.num_local_experts > 1:
+            raise NotImplementedError(f"{self.num_local_experts=} is not supported")
+        expert_outout, inside_probs = self.local_moe(routed_features)
+        mask = F.one_hot(inside_probs.argmax(dim=-1), num_classes=inside_probs.shape[-1])
+        aux_loss_weight = self.insidegpu_gate.aux_loss_weight
+        self.l_aux, metadata =  AuxLoss.get_auxloss(inside_probs, mask, aux_loss_weight['load_balance'], aux_loss_weight['zloss'], aux_loss_weight['entropy'])
+        self.exp_counts = metadata
+
+        # Return to original worker and ordering
+        expert_outout = All2All.apply(expert_outout, output_splits, input_splits)
+        recovered_outout = expert_outout[inverse_sort(sort_by_expert)] # (s,d)
+        combined_outout = routing_probs.type_as(recovered_outout) * recovered_outout
+
+        if self.shuffle and is_training:
+            # Undo shuffling
+            combined_outout = All2All.apply(combined_outout)[inverse_sort(shuffle_sort)]
+        combined_outout = combined_outout.view_as(input[0])
+        return combined_outout
+
+    def local_moe(self, inputs):
+        if self.wall_clock_breakdown:
+            self.timers('inside-moe').start()
+
+        # Implement Algorithm 2 from GShard paper.
+        input_shape = inputs.shape
+        d_model = inputs.shape[-1]
+
+        # Initial implementation -> Reshape into S tokens by dropping sequence dimension.
+        # Reshape into G groups so that each group can distribute tokens equally
+        # group_size = kwargs['group_size'] if 'group_size' in kwargs.keys() else 1
+        reshaped_input = inputs.reshape(-1, d_model)
+        sort_indices, reversed_ordering, combined_weights, input_splits, inside_probs = self.insidegpu_gate(reshaped_input)
+        
+        dispatched_input = reshaped_input[sort_indices]
+
+        expert_output = self.experts(dispatched_input, input_splits)
+        recovered_expert_output = expert_output[reversed_ordering]
+
+        combined_output = recovered_expert_output * combined_weights.unsqueeze(dim=-1)
+
+        if self.insidegpu_gate.k > 1:
+            combined_output = combined_output.reshape(-1, self.insidegpu_gate.k, d_model).sum(dim=1)
+
+        a = combined_output.reshape(input_shape)
+
+        if self.wall_clock_breakdown:
+            self.timers('inside-moe').stop()
+            self.time_moe = self.timers('local_moe').elapsed(reset=False)
+
+        return a, inside_probs
+    
+    
 
 class LocalMoELayer(HierMoELayer):
     def __init__(self, insidegpu_gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
