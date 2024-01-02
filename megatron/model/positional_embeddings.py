@@ -37,8 +37,16 @@ class SinusoidalPositionalEmbedding(torch.nn.Module):
 
 class RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_seq_len, base=10000, precision=torch.half):
+    def __init__(self, dim, max_seq_len, base=10000, precision=torch.half):
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.precision = precision
+        self.max_seq_len = max_seq_len
+        self.base = base
+        self.dim = dim
+        
+        # precompute cos_cached, sin_cached in fp32
+        cos_cached, sin_cached, inv_freq = self._prepare_cache(max_seq_len, precision, base)
+
         self.register_buffer("inv_freq", inv_freq)
         self.seq_len_cached = None
         self.cos_cached = None

@@ -107,7 +107,17 @@ class NeoXArgsModel(NeoXArgsTemplate):
 
     num_attention_heads: int = None
     """
-    Number of transformer attention heads.
+    Number of transformer attention heads. Used for number of query heads only, if num_kv_heads is set.
+    """
+
+    num_kv_heads: int = None 
+    """
+    Number of transformer key/value attention heads. Need not be set if using attention_type `multihead` or `multiquery`.
+    """
+
+    attention_type: Literal["multihead", "multiquery", "groupedquery"] = "multihead"
+    """
+    Whether to use multi-head, multi-query (https://arxiv.org/pdf/1911.02150.pdf), or grouped-query (https://arxiv.org/pdf/2305.13245.pdf) attention.
     """
 
     seq_length: int = None
@@ -492,9 +502,19 @@ class NeoXArgsLRScheduler(NeoXArgsTemplate):
     Minimum value for learning rate. The scheduler clips values below this threshold.
     """
 
-    warmup: float = 0.01
+    decay_lr_to: float = None
+    """
+    If using cosine decay, the ratio of max lr that the lr is decayed to, prior to any clipping based on the value of `min_lr`.
+    """
+
+    warmup: float = None
     """
     Percentage of total iterations to warmup on (.01 = 1 percent of all training iters).
+    """
+
+    warmup_iters: int = None
+    """
+    Number of iterations to warm up for. Incompatible with `warmup`.
     """
 
     override_lr_scheduler: bool = False
