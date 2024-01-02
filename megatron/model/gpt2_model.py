@@ -240,7 +240,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 # TODO: implement shared moe layers
                 if self.neox_args.moe_share_layers is not None and layer_cls == MoEParallelTransformerLayerPipe:
                     assert self.neox_args.pipe_parallel_size <= 1, "not support using pp and sharing moe layers together"
-                    group_size = self.neox_args.moe_share_layers.get('group_size', 1)
+                    group_size = self.neox_args.moe_share_layers.get('group_size', self.neox_args.num_layers)
                     assert self.neox_args.num_layers % group_size == 0
                     group_idx = i // group_size
                     # only share params inside group
