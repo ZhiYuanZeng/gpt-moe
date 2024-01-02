@@ -2,13 +2,84 @@ from typing import Any
 import torch.nn as nn
 import torch
 import sys
-from deepspeed.moe.layer import MoE, MOELayer
+from deepspeed.moe.layer import MoE, MOELayer, Experts
 from torch import Tensor
 from typing import Any
 import torch
 from torch import Tensor
 from torch.nn import Module
-from megatron.model.moe.hier_moe import LocalExperts
+import copy
+
+class LocalExperts(torch.nn.Module):
+    @classmethod
+    def from_existing_experts(cls, experts: Experts, expert_group_name):
+        return cls(expert_group_name=expert_group_name, existing_experts = experts.deepspeed_experts)
+
+    def __init__(self, expert=None, num_local_experts=1, expert_group_name=None, existing_experts=None):
+        super(LocalExperts, self).__init__()
+
+        if expert is not None:
+            self.deepspeed_experts = torch.nn.ModuleList([copy.deepcopy(expert) for i in range(num_local_experts)])
+            self.num_local_experts = num_local_experts
+        else:
+            assert existing_experts is not None and isinstance(existing_experts, torch.nn.ModuleList)
+            self.deepspeed_experts = existing_experts
+            self.num_local_experts = len(self.deepspeed_experts)
+        # TODO: revisit allreduce for moe.gate...
+        for expert in self.deepspeed_experts:
+            # TODO: Create param groups to handle expert + data case (e.g. param.group = moe_group)
+            for name, param in expert.named_parameters():
+                param.allreduce = False
+                param.group_name = expert_group_name
+
+    def _forward_with_chunks(self, inputs):
+        chunks = inputs.chunk(self.num_local_experts, dim=0)
+        expert_outputs = []
+        for chunk, expert in zip(chunks, self.deepspeed_experts):
+            out = expert(chunk)
+            if type(out) is tuple:
+                out = out[0]  # Ignore the bias term for now
+            expert_outputs += [out]
+
+        expert_output = torch.cat(expert_outputs, dim=0)
+        return expert_output
+
+
+    def forward(self, inputs, input_split=None):
+        if input_split is None:
+            return self._forward_with_chunks(inputs)
+        
+        assert isinstance(input_split, list)
+        assert len(inputs.shape) == 2
+
+        chunks = torch.split(inputs, split_size_or_sections = input_split, dim=0)
+        assert len(chunks) == len(self.deepspeed_experts)
+        
+        expert_outputs = []
+        skip_expert_outputs = 0.
+        for i, (chunk, expert) in enumerate(zip(chunks, self.deepspeed_experts)):
+            assert chunk.shape[0] == input_split[i]
+            skip_expert = False
+            try:
+                if chunk.shape[0] == 0:
+                    skip_expert = True
+                    chunk = torch.zeros((1, inputs.shape[-1]), dtype=inputs.dtype, device=inputs.device)
+                out = expert(chunk)
+            except Exception:
+                raise RuntimeError(f"the chunk size is : {chunk.shape}")
+            
+            if type(out) is tuple:
+                out = out[0]  # Ignore the bias term for now
+            if skip_expert:
+                skip_expert_outputs += out.mean() * 0. # skipped outputs have zero grad, so the all-reduce will not be blocked
+            else:
+                expert_outputs += [out]
+        assert skip_expert_outputs == 0 or skip_expert_outputs.item() == 0
+        expert_output = torch.cat(expert_outputs, dim=0) + skip_expert_outputs
+        assert expert_output.shape == inputs.shape
+        return expert_output
+
+
 
 class BaseLayerMoE(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
@@ -40,6 +111,7 @@ class BaseLayer(MOELayer):
     @classmethod
     def from_moe_layer(cls, moe_layer:MOELayer):
         experts = LocalExperts.from_existing_experts(moe_layer.experts, expert_group_name=moe_layer.ep_group_name)
+        assert torch.allclose(moe_layer.experts.deepspeed_experts[0].w1.weight, experts.deepspeed_experts[0].w1.weight)
         return cls(moe_layer.gate, experts, moe_layer.ep_group_name, moe_layer.ep_size, moe_layer.num_local_experts)
 
     def __init__(self,
@@ -51,7 +123,7 @@ class BaseLayer(MOELayer):
                  use_tutel: bool = False,
                  use_elbo = False) -> None:
         super(BaseLayer, self).__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel=use_tutel, use_elbo=use_elbo)
-        self.gate = BaseLayerGate(d_model = gate.wg.weight.shape[1], num_experts=gate.wg.weight.shape[0])
+        self.gate = BaseLayerGate(gate.wg, gate_st=gate.gate_st)
         self.shuffle=False
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
@@ -76,7 +148,7 @@ class BaseLayer(MOELayer):
         # Return to original worker and ordering
         expert_outout = All2All.apply(expert_outout, output_splits, input_splits)
         recovered_outout = expert_outout[inverse_sort(sort_by_expert)] # (s,d)
-        combined_outout = routing_probs * recovered_outout
+        combined_outout = routing_probs.type_as(recovered_outout) * recovered_outout
 
         if self.shuffle and is_training:
             # Undo shuffling
@@ -94,14 +166,18 @@ def inverse_sort(order):
 
 
 class BaseLayerGate(nn.Module):
-    def __init__(self, d_model, num_experts):
+    def __init__(self, wg, gate_st):
         super().__init__()
-        self.num_workers = num_experts
-        self.wg = torch.nn.Linear(d_model, self.num_workers)
+        self.num_workers = wg.weight.shape[0]
+        self.wg = wg
+        self.gate_st = gate_st
         torch.nn.init.orthogonal_(self.wg.weight.data, gain=0.1)
         self.cpp_balanced_assignment = self._load_assignment()
 
     def forward(self, features, is_training, *args, **kwargs):
+        if self.wg.weight.dtype != torch.float32:
+            self.wg = self.wg.float()
+        features = features.float()
 
         with torch.no_grad():
             # Compute similarity of each token to each expert, for routing
@@ -116,9 +192,11 @@ class BaseLayerGate(nn.Module):
             else self.greedy_assignment(token_expert_affinities)
         )
         routing_probs = torch.softmax(token_expert_affinities, dim=1)
+        routing_probs = self.gather_scores(routing_probs, sort_by_expert, input_splits)
+        if self.gate_st:
+            routing_probs = routing_probs - routing_probs.detach() + 1
         
-        return sort_by_expert, input_splits, output_splits, self.gather_scores(
-            routing_probs, sort_by_expert, input_splits)
+        return sort_by_expert, input_splits, output_splits, routing_probs
     
     def gather_scores(self, scores, sort_indices, input_splits):
         sorted_scores = scores[sort_indices]
@@ -140,7 +218,10 @@ class BaseLayerGate(nn.Module):
         if not ok.all():
             # NaNs here can break the assignment algorithm
             scores[~ok] = scores[ok].min()
-        return self.cpp_balanced_assignment(scores, False), None, None
+        
+        input_split = [scores.shape[0] // scores.shape[1] for i in range(self.num_workers)]
+        output_split = All2All.apply(torch.tensor(input_split, device=scores.device)).tolist()
+        return self.cpp_balanced_assignment(scores, False), input_split, output_split
     
     # Assigns each token to the top k experts
     def greedy_assignment(self, scores, k=1):
