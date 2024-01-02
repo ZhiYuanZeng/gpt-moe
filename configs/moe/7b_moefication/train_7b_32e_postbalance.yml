@@ -54,8 +54,8 @@
    "min_lr": 0.0000012,
 
    # batch / data settings
-   "train_batch_size": 512,
-   "gas": 1,
+   "train_batch_size": 256,
+   "train_micro_batch_size_per_gpu": 8,
    "data_impl": "mmap",
 
    # activation checkpointing
@@ -105,9 +105,25 @@
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/llama_7b_finetune/",
-  "load": "./checkpoints/neox/llama7B",
-  "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/dense/llama_7b_finetune/",
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_postbalance/",
+  "load": "./checkpoints/neox/converted-llama7B-32e",
+  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32/",
+  # "load_iteration": 5000,
+  "tensorboard-dir": "tensorboard/moefication/llama_7b_e32_postbalance/",
   "log-dir": "./logs",
+  "from_dense_to_moe": {
+    "do_convert": false,
+    "post": "balanced"
+  },
+  "moe_num_experts": 32,
+  "ep_world_size": 32, 
+  "moe_top_k": 1,
+  "moe_min_capacity": 0,
+  "moe_freq": 2,
+  "moe_aux_loss_weight": {
+    "load_balance": 0.01,
+    "zloss": 0,
+    "entropy": 0,
+    "kl_div": 0
+  },
 }

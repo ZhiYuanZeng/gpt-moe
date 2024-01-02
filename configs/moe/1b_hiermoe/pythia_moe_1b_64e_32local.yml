@@ -98,12 +98,12 @@
 
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/1b/pythia_1b_32e_32local",
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/1b/pythia_1b_64e_32local",
   # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/moe_1b_32e_from_scratch/",
-  "tensorboard-dir": "tensorboard/moe/1b/pythia_1b_32e_32local",
+  "tensorboard-dir": "tensorboard/moe/1b/pythia_1b_64e_32local",
 
-  "moe_num_experts": 32,
-  "ep_world_size": 1,
+  "moe_num_experts": 64,
+  "ep_world_size": 2,
   "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
@@ -115,5 +115,5 @@
     "entropy": 0,
   },
   "hier_moe": true,
-  # "moe_gate_st": true
+  "moe_gate_st": true
 }

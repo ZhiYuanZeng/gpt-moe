@@ -86,7 +86,7 @@
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
    "warmup": 0.03,
-   "checkpoint_factor": 5000,
+   "checkpoint_factor": 10000,
    "eval_interval": 1000,
    "eval_iters": 10,
 
@@ -96,33 +96,18 @@
    "keep_last_n_checkpoints": 4,
    "wall_clock_breakdown": true,
 
-  "train-data-paths": ["data/slimpajama/chunk1_text_document"],
-  "valid-data-paths": ["data/slimpajama/chunk1_text_document"],
-  "test-data-paths": ["data/slimpajama/chunk1_text_document"],
+  "train-data-paths": ["data/slimpajama/slimpajama_mistral/RedPajamaBook_text_document"],
+  "valid-data-paths": ["data/slimpajama/slimpajama_mistral/RedPajamaBook_text_document"],
+  "test-data-paths": ["data/slimpajama/slimpajama_mistral/RedPajamaBook_text_document"],
 
-  "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
+  "vocab-file": "../MixtralKit/mistral-moe-ckpt/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32/",
-  "load": "./checkpoints/neox/converted-llama7B-32e",
-  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32/",
-  # "load_iteration": 5000,
-  "tensorboard-dir": "tensorboard/moefication/llama_7b_e32/",
+  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/mistral7b-dense/",
+  "load": "./checkpoints/neox/converted-llama7B-dense",
+  # "load": "./checkpoints/neox/llama7B",
+  "load_iteration": 0,
+  "tensorboard-dir": "tensorboard/moefication/mistral7b-dense/",
   "log-dir": "./logs",
-  "from_dense_to_moe": {
-    "do_convert": false,
-    "debug": false
-  },
-  "moe_num_experts": 32,
-  "ep_world_size": 32,
-  "moe_top_k": 1,
-  "moe_min_capacity": 0,
-  "moe_freq": 2,
-  "moe_aux_loss_weight": {
-    "load_balance": 0.01,
-    "zloss": 0,
-    "entropy": 0,
-    "kl_div": 0
-  }
 }
