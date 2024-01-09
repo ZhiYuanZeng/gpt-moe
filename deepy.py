@@ -23,6 +23,7 @@ from megatron.neox_arguments import NeoXArgs
 from megatron.utils import get_wandb_api_key
 from train import main
 from tools.ckpts.convert_dense_ckpt_to_moe import main as dense_to_moe_main
+from evaluate import main as eval_main
 
 neox_args = NeoXArgs.consume_deepy_args()
 main_args = neox_args.get_main_args()
@@ -30,7 +31,10 @@ main_args = neox_args.get_main_args()
 wandb_token = get_wandb_api_key(neox_args=neox_args)
 if wandb_token is not None:
     os.environ["WANDB_API_KEY"] = wandb_token
+
 if neox_args.from_dense_to_moe and neox_args.from_dense_to_moe['do_convert']:
     dense_to_moe_main(main_args)
+elif neox_args.eval_tasks is not None:
+    eval_main(main_args)
 else:
     main(main_args)

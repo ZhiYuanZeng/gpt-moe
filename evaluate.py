@@ -29,10 +29,31 @@ from eval_tasks import run_eval_harness
 from pprint import pprint
 from datetime import datetime
 import json
+from deepspeed.utils.logging import logger
+import torch
 
+class RemoveProxy:
+    def __enter__(self):
+        self.http_proxy = os.environ.get('http_proxy', "")
+        self.https_proxy = os.environ.get('https_proxy', "")
+        self.HTTP_PROXY = os.environ.get('HTTP_PROXY', "")
+        self.HTTPS_PROXY = os.environ.get('HTTPS_PROXY', "")
+        os.environ['http_proxy'] = ""
+        os.environ['https_proxy'] = ""
+        os.environ['HTTP_PROXY'] = ""
+        os.environ['HTTPS_PROXY'] = ""
 
-def main():
-    model, neox_args = setup_for_inference_or_eval(use_cache=False)
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.environ['http_proxy'] = self.http_proxy
+        os.environ['https_proxy'] = self.https_proxy
+        os.environ['HTTP_PROXY'] = self.HTTP_PROXY
+        os.environ['HTTPS_PROXY'] = self.HTTPS_PROXY
+        
+def main(args):
+    logger.info(f"{os.environ['http_proxy']=}")
+    with RemoveProxy():
+        model, neox_args = setup_for_inference_or_eval(args, use_cache=False)
+    logger.info(f"{os.environ['http_proxy']=}")
     results = run_eval_harness(
         model,
         forward_step,
@@ -41,7 +62,6 @@ def main():
         bootstrap_iters=10000,
     )
     if neox_args.rank == 0:
-        init_wandb(neox_args=neox_args)
         # log to wandb
         for k, v in results["results"].items():
             if isinstance(v, dict):
@@ -69,7 +89,6 @@ def main():
             results_path = f"{neox_args.eval_results_prefix}_{results_path}"
         with open(results_path, "w") as f:
             json.dump(results, f, indent=4)
-
 
 if __name__ == "__main__":
     main()

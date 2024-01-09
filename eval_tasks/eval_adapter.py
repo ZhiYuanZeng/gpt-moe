@@ -70,12 +70,19 @@ class EvalHarnessAdapter(GPT2LM):
         self.is_main = neox_args.rank == 0
         self.is_local_main = neox_args.local_rank == 0
         self.is_model_parallel = neox_args.model_parallel_size > 1
-        self.is_pipe_parallel = self.model.is_pipe_parallel
-        self.is_data_parallel = self.model.is_data_parallel
+        self.is_pipe_parallel = neox_args.is_pipe_parallel
+        # self.is_data_parallel = neox_args.is_data_parallel
         self.is_last_stage = (
             True if not self.is_pipe_parallel else model.is_last_stage()
         )  # only the last stage of the pipeline model will receive the logits
-        self.dp_world_size = mpu.get_data_parallel_world_size()
+        if neox_args.moe_freq > 0:
+            # is moe, use model parall at inference
+            # TODO: implement data parallel for moe inference
+            self.dp_world_size = 1
+            self.is_moe = True
+        else:
+            self.dp_world_size = mpu.get_data_parallel_world_size()
+            self.is_moe = False
         self.dp_rank = mpu.get_data_parallel_rank()
         self.dp_group = mpu.get_data_parallel_group()
         self.is_mp_rank_0 = mpu.get_model_parallel_rank() == 0
@@ -161,13 +168,12 @@ class EvalHarnessAdapter(GPT2LM):
                 s = cont[0]["text"] or ""
             else:
                 s = ""
-
+            print_rank_0(f'{s=}')
             for term in until:
                 s = s.split(term)[0]
 
             # partial caching
             self.cache_hook.add_partial("greedy_until", (context, until), s)
-
             res.append(s)
 
         self.model.module.train_mode()  # set back to train mode
@@ -231,7 +237,7 @@ class EvalHarnessAdapter(GPT2LM):
 
                 logits = self._model_call(torch.cat(inps, dim=0))
                 res_len += len(chunk)
-
+                assert logits is not None
                 if logits is not None:
                     multi_logits = F.log_softmax(logits, dim=-1)  # [batch, seq, vocab]
                     for (cache_key, _, _), logits, inp, inplen, cont_toks in zip(
@@ -335,20 +341,31 @@ class EvalHarnessAdapter(GPT2LM):
             return logits
 
     def _model_call(self, inps):
+        """
+        although moe should be run data-parallel, we currently implement it in model-parallel:
+        - dp_world_size is set to 1
+        - We broadcast data on the global group, rather than the mp group
+        - We do not gather results from dp group
+
+        """
         batch_size = inps.shape[0]
 
         # scatter inputs to all dp ranks:
         inps, padded = self._dp_scatter(inps)
-
         if self.neox_args.is_pipe_parallel:
             # need these flags to stop deepspeed pipe parallel from hanging
             self.model.first_output_send = True
             self.model.pipe_recv_buf = None
 
-        _, logits = self._forward_step_fn(model=self.model, data_iterator=inps)
+        if self.is_moe:
+            broadcaset_on_mp = False
+        else:
+            broadcaset_on_mp = True
+        _, logits, _, _ = self._forward_step_fn(model=self.model, data_iterator=inps, broadcaset_on_mp=broadcaset_on_mp)
 
         # gather outputs from all dp ranks:
-        logits = self._dp_gather(logits)
+        if not self.is_moe:
+            logits = self._dp_gather(logits)
 
         # if logits have been padded (normally just last item where batch size is unequal)
         # restore to original shape
@@ -374,12 +391,12 @@ class EvalHarnessAdapter(GPT2LM):
         was_training = self.model.training
         self.model.eval()
         in_micro_batches = (
-            self.model.micro_batches
+            self.model.train_micro_batch_size_per_gpu
         )  # store input microbatches - we need to set to 1 during eval, but want to return to its original value after
-        self.model.micro_batches = 1
+        self.model.train_micro_batch_size_per_gpu = 1
         if eval_tasks is None:
             eval_tasks = [
-                "lambada",
+                "lambada_openai",
                 "piqa",
                 "hellaswag",
                 "winogrande",
@@ -394,12 +411,13 @@ class EvalHarnessAdapter(GPT2LM):
         def pattern_match(patterns, source_list):
             task_names = set()
             for pattern in patterns:
+                assert pattern in source_list, source_list
                 for matching in fnmatch.filter(source_list, pattern):
                     task_names.add(matching)
             return list(task_names)
 
         eval_tasks = pattern_match(eval_tasks, tasks.ALL_TASKS)
-        print(f"Found tasks: {eval_tasks}")
+        print(f"Found tasks: {eval_tasks}", flush=True)
 
         # **HACK INCOMING**:
         # first get task dict on local main rank
@@ -441,7 +459,7 @@ class EvalHarnessAdapter(GPT2LM):
 
         if was_training:
             self.model.train()
-        self.model.micro_batches = in_micro_batches
+        self.model.train_micro_batch_size_per_gpu = in_micro_batches
         return results
 
 
