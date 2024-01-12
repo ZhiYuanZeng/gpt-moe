@@ -157,3 +157,6 @@ compress_llama_7b/
 
 train_scripts/
 *.out
+
+eval_results/
+eval_scripts/
