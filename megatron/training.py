@@ -30,7 +30,6 @@ import deepspeed
 from deepspeed.runtime.data_pipeline.curriculum_scheduler import CurriculumScheduler
 import numpy as np
 
-from CPCargo import Heartbeat
 from megatron.utils import (
     Timers,
     init_wandb,
@@ -56,7 +55,7 @@ from megatron.utils import (
     CharCounter,
 )
 from megatron.model.criterion import cross_entropy
-from eval_tasks import run_eval_harness
+# from eval_tasks import run_eval_harness
 from deepspeed.moe.utils import split_params_into_different_moe_groups_for_optimizer
 import math
 import functools
@@ -194,6 +193,8 @@ def pretrain(neox_args):
 
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
+    if neox_args.train_iters <= 0:
+        neox_args.optimizer = None
     model, optimizer, lr_scheduler = setup_model_and_optimizer(
         neox_args=neox_args, use_cache=False
     )
@@ -276,9 +277,12 @@ def pretrain(neox_args):
         )
 
 
-def _get_batch(neox_args, tokenizer, keys, data, datatype):
+def _get_batch(neox_args, tokenizer, keys, data, datatype, broadcaset_on_mp = True):
     """Support function for get_batch / get_batch pipe (to avoid code repetition)"""
-    data_b = mpu.broadcast_data(keys, data, datatype)
+    if broadcaset_on_mp:
+        data_b = mpu.broadcast_data(keys, data, datatype)
+    else:
+        data_b = mpu.broadcast_data_on_ep(keys, data, datatype)
 
     # Unpack.
     tokens_ = data_b["text"].long()
@@ -304,7 +308,7 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 
-def get_batch(neox_args, data_iterator):
+def get_batch(neox_args, data_iterator, broadcaset_on_mp=True):
     """Generate a batch"""
 
     # Items and their type.
@@ -322,6 +326,7 @@ def get_batch(neox_args, data_iterator):
         keys=keys,
         data=data,
         datatype=datatype,
+        broadcaset_on_mp = broadcaset_on_mp
     )
 
 
@@ -416,7 +421,7 @@ def flatten_histogram_to_list(metadata):
     return metadata
 
 def forward_step(
-    data_iterator, model, neox_args, timers, return_logits=False, is_train=False
+    data_iterator, model, neox_args, timers, return_logits=False, is_train=False, broadcaset_on_mp=True
 ):
     """Forward step."""
     if neox_args.is_pipe_parallel:
@@ -426,12 +431,11 @@ def forward_step(
     if timers is not None:
         timers("batch generator").start()
     tokens, labels, loss_mask, attention_mask, position_ids = get_batch(
-        neox_args=neox_args, data_iterator=data_iterator
+        neox_args=neox_args, data_iterator=data_iterator, broadcaset_on_mp=broadcaset_on_mp
     )
 
     if timers is not None:
         timers("batch generator").stop()
-
     outputs = model((tokens, position_ids, attention_mask), neox_args=neox_args)
     if (
         is_train
@@ -452,7 +456,7 @@ def forward_step(
         lm_outputs, (labels, loss_mask), _fp16=neox_args.fp16_lm_cross_entropy
     )
     if return_logits:
-        return lm_loss, l_aux, lm_outputs
+        return lm_loss, lm_outputs, l_aux, moe_metadata
     return lm_loss, l_aux, moe_metadata
 
 
@@ -776,22 +780,28 @@ def setup_optim(model, neox_args):
         raise ValueError("Must be using deepspeed to run neox")
     return model, optimizer, lr_scheduler
 
-def setup_model_and_optimizer(neox_args, use_cache=False):
+def setup_model_and_optimizer(neox_args, use_cache=False, **kwargs):
     """Setup model and optimizer."""
     model = get_model(neox_args=neox_args, use_cache=use_cache)
     model, optimizer, lr_scheduler = setup_optim(model, neox_args) 
     if neox_args.load is not None:
-        neox_args.iteration = load_checkpoint(
+        neox_args.iteration = neox_args.load_iteration
+        print_rank_0(
+            f"Start loading checkpoint..."
+        )
+        if neox_args.finetune:
+            assert neox_args.load_iteration == 0
+        _ = load_checkpoint(
             neox_args=neox_args,
             model=model,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             iteration=neox_args.load_iteration,
         )
-        print_rank_0(
-            f"Loading checkpoint and starting from iteration {neox_args.iteration}"
-        )
         torch.distributed.barrier()
+        print_rank_0(
+            f"Loaded checkpoint and starting from iteration {neox_args.iteration}"
+        )
     else:
         neox_args.iteration = 0
 
@@ -936,16 +946,16 @@ def train(
     """Train the model function."""
     # evaluate on step 0
     prefix = "iteration 0"
-    evaluate_and_print_results(
-        neox_args=neox_args,
-        prefix=prefix,
-        forward_step_func=forward_step,
-        data_iterator=valid_data_iterator,
-        model=model,
-        iteration=0,
-        verbose=False,
-        timers=timers,
-    )
+    # evaluate_and_print_results(
+    #     neox_args=neox_args,
+    #     prefix=prefix,
+    #     forward_step_func=forward_step,
+    #     data_iterator=valid_data_iterator,
+    #     model=model,
+    #     iteration=0,
+    #     verbose=False,
+    #     timers=timers,
+    # )
 
     # Turn on training mode which enables dropout.
     model.train()

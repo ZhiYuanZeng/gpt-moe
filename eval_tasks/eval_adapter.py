@@ -411,7 +411,7 @@ class EvalHarnessAdapter(GPT2LM):
         def pattern_match(patterns, source_list):
             task_names = set()
             for pattern in patterns:
-                assert pattern in source_list, source_list
+                assert pattern in source_list, pattern
                 for matching in fnmatch.filter(source_list, pattern):
                     task_names.add(matching)
             return list(task_names)
