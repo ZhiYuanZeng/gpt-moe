@@ -183,12 +183,12 @@ def get_args():
         "--tokenizer-type",
         type=str,
         required=True,
-        choices=[
-            "HFGPT2Tokenizer",
-            "HFTokenizer",
-            "GPT2BPETokenizer",
-            "CharLevelTokenizer",
-        ],
+        # choices=[
+        #     "HFGPT2Tokenizer",
+        #     "HFTokenizer",
+        #     "GPT2BPETokenizer",
+        #     "CharLevelTokenizer",
+        # ],
         help="What type of tokenizer to use.",
     )
     group.add_argument(
@@ -261,16 +261,32 @@ def yield_from_files(fnames: list, semaphore):
         yield from yielder(fname, semaphore)
 
 
-def mask(sentence: list, pivot_tokens: list, include_pivot=True):
+def mask(sentence: list, pivot_tokens: list, include_pivot=True, del_pivot=True):
+    def del_(my_list, sub_list):
+        result  = []
+        i = 0
+        while i < len(my_list):
+            if my_list[i:i+len(sub_list)] == sub_list:
+                i += len(sub_list)
+            else:
+                result.append(my_list[i])
+                i += 1
+        return result
+
     inds = kmp(sentence, pivot_tokens)
     if not inds:
-        return sentence
+        return sentence, sentence
     index = inds[0]
-    if include_pivot:
-        index += len(pivot_tokens)
-
-    return [-100] * index + sentence[index:]
-
+    
+    if del_pivot:
+        masked_sentence = [-100] * index + sentence[index+len(pivot_tokens):]
+        deleted_senence = del_(sentence, pivot_tokens)
+    else:
+        if include_pivot:
+            index += len(pivot_tokens) # ignore pivot
+        masked_sentence, deleted_senence = [-100] * index + sentence[index:], sentence
+    assert len(masked_sentence) == len(deleted_senence)
+    return masked_sentence, deleted_senence
 
 def main():
     args = get_args()
@@ -343,6 +359,7 @@ def main():
     proc_start = time.time()
     total_bytes_processed = 0
     pbar = tqdm.tqdm()
+
     for i, (doc, bytes_processed) in enumerate(encoded_docs, start=1):
         total_bytes_processed += bytes_processed
 
@@ -352,12 +369,21 @@ def main():
         # add each tokenized document / sentence
         for key, sentences in doc.items():
             for sentence in sentences:
-                builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
                 if token_mask:
-                    masked_sentence = mask(sentence, token_mask)
+                    # remove pivot from sentence
+                    masked_sentence, deleted_sentence = mask(sentence, token_mask, del_pivot=True)
                     builders["label"].add_item(
                         np.array(masked_sentence, dtype=builders["text"].dtype)
                     )
+                    # if i % args.log_interval == 0:
+                    #     print(sentence)
+                    #     print('-'*40)
+                    #     print(deleted_sentence)
+                    #     print('-'*40)
+                    #     print(masked_sentence)
+                    #     print('='*40)
+                    sentence = deleted_sentence
+                builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
             # separate with eos token
             builders[key].end_document()
             if token_mask:

@@ -21,7 +21,6 @@ import argparse
 import multiprocessing
 import os
 import sys
-
 import lm_dataformat as lmd
 import numpy as np
 
@@ -47,17 +46,21 @@ class Encoder(object):
         Encoder.tokenizer = build_tokenizer(self.args)
 
     def encode(self, text):
-        if self.args.ftfy:
-            text = ftfy.fix_text(text)
-        ids = {}
-        for key in self.args.jsonl_keys:
-            doc_ids = []
-            text_ids = Encoder.tokenizer.tokenize(text)
-            if len(text_ids) > 0:
-                doc_ids.append(text_ids)
-            if self.args.append_eod:
-                doc_ids[-1].append(Encoder.tokenizer.eod)
-            ids[key] = doc_ids
+        try:
+            if self.args.ftfy:
+                text = ftfy.fix_text(text)
+            ids = {}
+            for key in self.args.jsonl_keys:
+                doc_ids = []
+                text_ids = Encoder.tokenizer.tokenize(text)
+                if len(text_ids) > 0:
+                    doc_ids.append(text_ids)
+                if self.args.append_eod:
+                    doc_ids[-1].append(Encoder.tokenizer.eod)
+                ids[key] = doc_ids
+        except Exception as e:
+            print(str(e)+' | '+text, flush=True)
+            return None, None
         return ids, len(text)
 
 
@@ -161,10 +164,13 @@ def yield_from_files(fnames: list, semaphore, jsonl_key='text'):
 
     :param fnames: list of filenames
     """
-
     def yielder(fname, semaphore):
-        for f in filter(lambda x: x, lmd.Reader(fname).stream_data(jsonl_key=jsonl_key)):
-            semaphore.acquire()
+        for f in lmd.Reader(fname).stream_data(jsonl_key=jsonl_key):
+            try:
+                semaphore.acquire()
+            except Exception as e:
+                print(str(e), flush=True)
+                continue
             yield f
 
     for fname in fnames:
@@ -217,18 +223,19 @@ def main():
     total_bytes_processed = 0
     pbar = tqdm.tqdm()
     for i, (doc, bytes_processed) in enumerate(encoded_docs, start=1):
-        total_bytes_processed += bytes_processed
-
         # release semaphore so `yield_from_files` can add another file to the buffer
         semaphore.release()
 
-        # add each tokenized document / sentence
-        for key, sentences in doc.items():
-            for sentence in sentences:
-                builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
-            # separate with eos token
-            builders[key].end_document()
+        if doc is not None:
+            total_bytes_processed += bytes_processed
 
+            # add each tokenized document / sentence
+            for key, sentences in doc.items():
+                for sentence in sentences:
+                    builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
+                # separate with eos token
+                builders[key].end_document()
+        
         # log progress
         if i % args.log_interval == 0:
             current = time.time()
