@@ -6,6 +6,7 @@ from megatron.model.moe.baselayer import BaseLayer
 from megatron.model.moe.hier_moe import HierBalancedMoELayer, LocalGate, LocalExperts
 from deepspeed.utils.logging import log_dist
 from collections import OrderedDict
+from torch import Tensor
 
 class MoeFromDense(MoE):
     """
@@ -16,7 +17,7 @@ class MoeFromDense(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None, post=None, hier_moe=None, gate_st=False, **kwargs):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, post=None, hier_moe=None, gate_st=False, unrouted_type='all', **kwargs):
         super(MoeFromDense, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -41,9 +42,11 @@ class MoeFromDense(MoE):
         assert post is None or post in ['local', 'balanced'], post
         if post == 'local':
             self.deepspeed_moe = LocalPostMoELayer.from_moe_layer(self.deepspeed_moe)
+            self.deepspeed_moe.unrouted_type = unrouted_type
         elif post == 'balanced':
             self.deepspeed_moe = BalancedPostMoELayer.from_moe_layer(self.deepspeed_moe)
-        
+            self.deepspeed_moe.unrouted_type = unrouted_type
+
         if hier_moe is not None:
             inside_k = hier_moe['inside_k']
             if experts is None:
@@ -83,9 +86,15 @@ class LocalPostMoELayer(MOELayer):
                     ep_size,
                     num_local_experts: int,
                     use_tutel: bool = False,
-                    use_elbo = False) -> None:        
+                    use_elbo = False,
+                    unrouted_type='all') -> None:        
         assert_all_experts_are_same(experts)
         super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo)
+        self.unrouted_type=unrouted_type
+        self.ep_rank = torch.distributed.get_rank(self.ep_group)
+        self.ep_world_size = torch.distributed.get_world_size(self.ep_group)
+        self.num_experts = self.ep_world_size * self.num_local_experts
+        assert self.num_experts == self.gate.wg.weight.shape[0]
 
     @classmethod
     def from_moe_layer(cls, moe_layer:MOELayer):
@@ -100,7 +109,8 @@ class LocalPostMoELayer(MOELayer):
         # group_size = kwargs['group_size'] if 'group_size' in kwargs.keys() else 1
         reshaped_inputs = inputs[0].reshape(-1, d_model)
 
-        self.l_aux, combine_weights, dispatch_mask, self.exp_counts = self.gate(reshaped_inputs, inputs[1])
+        self.l_aux, combine_weights, dispatch_mask, self.exp_counts, routing_probs = self.gate(
+            reshaped_inputs, inputs[1], return_gates=True)
         dispatched_inputs = einsum(
             "sec,sm->ecm", dispatch_mask.type_as(inputs[0]), reshaped_inputs
         )  # TODO: heavy memory usage due to long sequence length
@@ -120,36 +130,64 @@ class LocalPostMoELayer(MOELayer):
 
         if self.gate.k == 1:
             combine_weights = combine_weights-combine_weights.detach() + dispatch_mask
+            # combine_weights = dispatch_mask
+            self.unrouted_type = 'all'
+        
         combined_output = einsum("sec,ecm->sm", combine_weights.type_as(inputs[0]), expert_output)
 
-        routed_mask = (dispatch_mask!=0).any(-1).any(-1)
-        
-        # dense_outputs = self.experts(reshaped_inputs)
-        # assert_close(combined_output[routed_mask], self.experts(reshaped_inputs[routed_mask]))
-        combined_output[~routed_mask] = self.postprocess(reshaped_inputs[~routed_mask]) # if tokens are unrouted, computed at local devices
-        
+        if self.unrouted_type == 'all': # both first and second routing are failed
+            routed_mask = (dispatch_mask!=0).any(-1).any(-1)
+            combined_output[~routed_mask], _ = self.post_routing(reshaped_inputs[~routed_mask]) # if tokens are unrouted, computed at local devices
+        elif self.unrouted_type == 'any': # either first or second routing are failed
+            combine_weights_sum = dispatch_mask.sum(dim=-1).sum(dim=-1) # number of experts that each token is sent to
+            if self.gate.k == 3:
+                routed_mask = (combine_weights_sum >= 2) # for top3 routing, we are actually doing top2 routing, only few of tokens are processed by the third expert
+            else:
+                routed_mask = (combine_weights_sum >= self.gate.k) # TODO: combine k=3 and post routing
+            unrouted_mask = ~routed_mask
+            masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
+
+            # we do not need to consider second experts routing, since the first routing is in prior
+            # the unrouted routing must be the second routing or both first and second routng
+            gates_mask = combine_weights_sum[unrouted_mask] > 0 # among unrouted tokens, which tokens are totally unrouted, which are partially unrouted
+            top1_probs = torch.max(masked_routing_probs, dim=-1, keepdim=True).values * gates_mask.unsqueeze(dim=-1) # routing probs of successfully top1-routing tokens
+            top1_outputs = combined_output[unrouted_mask]
+
+            # postprocess unrouted tokens
+            post_routing_outputs, post_routing_expert_indices = self.post_routing(reshaped_inputs[unrouted_mask])
+            post_routing_probs = torch.gather(
+                masked_routing_probs, dim=1, index=post_routing_expert_indices.unsqueeze(dim=-1))
+            assert top1_probs.shape == post_routing_probs.shape, f'{top1_probs.shape=}, {post_routing_probs.shape=}'
+            norm = torch.clamp(top1_probs+post_routing_probs, min=torch.finfo(top1_probs.dtype).eps)
+            combined_output[unrouted_mask] = (post_routing_outputs * post_routing_probs + top1_probs * top1_outputs) / norm
         out = combined_output.reshape(inputs[0].shape)
         
         return out
     
-    def postprocess(self, inputs):
-        return self.experts(inputs)
+    def post_routing(self, inputs:Tensor):
+        num_tokens = inputs.shape[0]
+        assert num_tokens % self.num_local_experts == 0
+        num_tokens_per_experts = inputs.shape[0] // self.num_local_experts
+        local_expert_indices = torch.tensor(
+            [i//num_tokens_per_experts for i in range(inputs.shape[0])], device=inputs.device)
+        global_expert_indices = self.ep_rank * self.num_local_experts + local_expert_indices
+        assert torch.all(global_expert_indices < self.num_experts), f'{self.ep_rank=}, {self.num_local_experts=}, {local_expert_indices=}'
+        return self.experts(inputs.unsqueeze(dim=0)).squeeze(dim=0), global_expert_indices
 
 class BaseLayerNoStateDict(BaseLayer):
     def state_dict(self, *args, **kwargs):
         return OrderedDict()
 
 class BalancedPostMoELayer(LocalPostMoELayer):
-    def __init__(self, gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False) -> None:
-        super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo)
-    
-    def postprocess(self, inputs):
+    def __init__(self, gate: Module, experts: Module, ep_group_name, ep_size, num_local_experts: int, use_tutel: bool = False, use_elbo=False, unrouted_type='all') -> None:
+        super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo, unrouted_type)
+     
+    def post_routing(self, inputs):
         if not hasattr(self, 'base_layer'):
             self.base_layer = BaseLayerNoStateDict.from_moe_layer(self)
             self.base_layer.gate.gate_st = True
 
         num_experts = self.gate.wg.weight.shape[0]
-        assert torch.allclose(self.base_layer.experts.deepspeed_experts[0].w1.weight, self.experts.deepspeed_experts[0].w1.weight)
         if inputs.shape[0] < num_experts or inputs.shape[0] % num_experts != 0:
             pad_len = num_experts - inputs.shape[0] % num_experts
             padded_inputs = torch.cat(
