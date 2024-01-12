@@ -21,10 +21,11 @@ import logging
 import copy
 import torch
 import argparse
-
+import datetime
 from dataclasses import dataclass
 from typing import List, Dict
 from socket import gethostname
+from datetime import datetime
 
 try:
     from typing import Literal, Union
@@ -686,8 +687,8 @@ class NeoXArgs(*BASE_CLASSES):
         """
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
-            hostname = gethostname()
-            file_prefix = os.path.join(self.log_dir, hostname)
+            time = datetime.now().strftime("%m-%d-%Y-%H-%M-%S")
+            file_prefix = os.path.join(self.log_dir, time)
             Tee(file_prefix + "_stdout.txt", err=False)
             Tee(file_prefix + "_stderr.txt", err=True)
 
@@ -742,7 +743,7 @@ class NeoXArgs(*BASE_CLASSES):
             import subprocess
             master_addr = subprocess.check_output('scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1', shell=True)
             os.environ['MASTER_ADDR'] = master_addr.decode("utf8").strip()
-            print('launch with slurm...................')
+            print('launch with slurm...................', flush=True)
 
         if 'LOCAL_RANK' in os.environ:
             self.update_value("local_rank", int(os.getenv("LOCAL_RANK", "0")))
@@ -958,17 +959,18 @@ class NeoXArgs(*BASE_CLASSES):
                 extra_args.update(bf_config)
                 self.update_value("deepspeed_extra_args", extra_args)
 
-            zero_stage = self.zero_optimization["stage"]
             if self.data_types is None:
                 fp32_grad_accum = False
             else:
                 fp32_grad_accum = self.data_types.get("grad_accum_dtype") == "fp32"
-            if (zero_stage > 0) and (pp_size > 0) and not fp32_grad_accum:
-                # Remove this code when this issue is resolved
-                # https://github.com/microsoft/DeepSpeed/issues/1835
-                logging.warn(
-                    "Outstanding DeepSpeed issue means that pp>0, zero1, and bf16 will break without fp32 grads"
-                )
+            if self.zero_optimization is not None: 
+                zero_stage = self.zero_optimization["stage"]
+                if (zero_stage > 0) and (pp_size > 0) and not fp32_grad_accum:
+                    # Remove this code when this issue is resolved
+                    # https://github.com/microsoft/DeepSpeed/issues/1835
+                    logging.warn(
+                        "Outstanding DeepSpeed issue means that pp>0, zero1, and bf16 will break without fp32 grads"
+                    )
         else:
             self.update_value("precision", "fp32")
 
