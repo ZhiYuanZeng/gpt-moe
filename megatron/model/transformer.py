@@ -368,18 +368,10 @@ class ParallelSelfAttention(nn.Module):
             )
         else:
             if self.use_flash_attention:
-                from megatron.model.flash_attention import (
-                    # flash_attn_unpadded_qkvpacked_func_cuda,
-                    # flash_attn_unpadded_kvpacked_func_cuda,
-                    # Change of function names going from flash attention 1 -> flash attention 2
-                    flash_attn_varlen_qkvpacked_func,
-                    flash_attn_varlen_kvpacked_func,
-                    flash_attn_unpadded_unpacked_func_triton,
-                )
-
-                self.flash_triton_fn = flash_attn_unpadded_unpacked_func_triton
-                self.flash_qkv_fn = flash_attn_varlen_qkvpacked_func
-                self.flash_kv_fn = flash_attn_varlen_kvpacked_func
+                from flash_attn.flash_attn_interface import flash_attn_func, flash_attn_varlen_func
+                self.flash_triton_fn = None
+                self.flash_qkv_fn = flash_attn_func
+                self.flash_varlen_qkv_fn = flash_attn_varlen_func
             else:
                 self.scale_mask_softmax = FusedScaleMaskSoftmax(
                     input_in_fp16=self.fp16,
@@ -453,12 +445,14 @@ class ParallelSelfAttention(nn.Module):
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
         # ==================================================
-
         if self.use_cache:
             with torch.no_grad():
+                # print_rank_0(f' before transform, {attention_mask.shape}=')
                 attention_mask = attention_mask[
                     ..., : attention_scores.size(3), : attention_scores.size(3)
                 ]
+                # print_rank_0(f'after transform, {attention_scores.shape}, {attention_mask.shape}')
+
 
         # ===========================
         # Attention probs and dropout
@@ -470,9 +464,11 @@ class ParallelSelfAttention(nn.Module):
 
         if self.pos_emb == "alibi":
             attention_scores = self.alibi_embed(attention_scores)
-
         # attention scores and attention mask [b, np, sq, sk]
-        attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
+        try:
+            attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
+        except Exception as e:
+            raise RuntimeError(f"{query_layer.shape=}, {key_layer.shape=}, {value_layer.shape=}, {attention_scores.shape=}, {attention_mask.shape=}")
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
