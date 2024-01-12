@@ -406,6 +406,7 @@ def get_total_params(model):
 
 
 def setup_for_inference_or_eval(
+    args,
     use_cache=True,
     overwrite_values=None,
 ):
@@ -431,19 +432,21 @@ def setup_for_inference_or_eval(
     }
     if overwrite_values:
         _overwrite_values.update(overwrite_values)
-    neox_args = NeoXArgs.consume_neox_args(overwrite_values=_overwrite_values)
-    neox_args.configure_distributed_args()
+    neox_args = NeoXArgs.consume_neox_args(args, overwrite_values=_overwrite_values)
+    neox_args.load = neox_args.save
+    neox_args.load_iteration = neox_args.train_iters
+    neox_args.label_data_paths = None
     neox_args.build_tokenizer()
+    neox_args.finetune = False
 
-    if neox_args.load is None:
-        raise ValueError("`load` parameter must be supplied to load a model`")
+    # if neox_args.load is None:
+    #     raise ValueError("`load` parameter must be supplied to load a model`")
 
     # initialize wandb
     init_wandb(neox_args=neox_args)
 
     # initialize megatron
     initialize_megatron(neox_args)
-
     # set up model and load checkpoint.
     model, _, _ = setup_model_and_optimizer(
         neox_args=neox_args,
