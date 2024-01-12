@@ -56,8 +56,8 @@ class AnnealingLR(object):
             assert not self.use_checkpoint_lr_scheduler, (
                 "both override and " "use-checkpoint are set."
             )
-        assert not (decay_lr_to and decay_style!="cosine")
-        self.decay_lr_to = decay_lr_to
+        # assert not (decay_lr_to and decay_style!="cosine")
+        # self.decay_lr_to = decay_lr_to
         # Set the learning rate
         self.step(self.num_iters)
 
@@ -77,16 +77,12 @@ class AnnealingLR(object):
             end_iter_ = self.end_iter - self.warmup_iter
             lr = self.start_lr * (end_iter_ - num_iters_) / end_iter_
         elif self.decay_style == "cosine":
-            half_period = self.end_iter - self.warmup_iter
-            lr = ( 
-                    self.start_lr * (
-                        self.decay_lr_to +
-                        (1 - self.decay_lr_to) *
-                        0.5 * (
-                            math.cos(math.pi * num_iters_/half_period) + 1
-                        )
-                    )
-            )   
+            end_iter_ = self.end_iter - self.warmup_iter
+            lr = self.min_lr + (
+                (self.start_lr-self.min_lr)
+                / 2.0
+                * (math.cos(math.pi * num_iters_ / end_iter_) + 1)
+            )
         elif self.decay_style == "exponential":
             # exp(-0.693) = 1/2
             end_iter = self.end_iter - self.warmup_iter

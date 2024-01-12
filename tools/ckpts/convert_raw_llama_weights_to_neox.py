@@ -305,7 +305,7 @@ def convert_model_sequential(
     num_layers = params["n_layers"]
     num_heads = params["n_heads"]
     print(params.keys())
-    num_kv_heads = params["n_kv_heads"]
+    num_kv_heads = params["n_heads"]
     num_kv_heads_per_input_shard = num_kv_heads // num_input_shards
     num_heads_per_input_shard = num_heads // num_input_shards
     num_heads_per_output_shard = num_heads // num_output_shards
