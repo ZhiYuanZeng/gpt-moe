@@ -27,4 +27,3 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 export WANDB_API_KEY="1aceff17102bea614105d6f44b26d4c9d81c1f22"
 export LD_LIBRARY_PATH=/mnt/petrelfs/zengzhiyuan.d/miniconda3/envs/moe/lib/:$LD_LIBRARY_PATH
 export PATH=/mnt/petrelfs/zengzhiyuan.d/miniconda3/envs/moe/bin:$PATH
-unset http_proxy; unset https_proxy; unset HTTP_PROXY; unset HTTPS_PROXY
