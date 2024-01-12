@@ -81,7 +81,7 @@
    },
 
    # misc. training settings
-   "train_iters": 65000,
+   "train_iters": -1,
    "lr_decay_iters": 65000,
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
@@ -104,18 +104,18 @@
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_postlocal/",
-  "load": "./checkpoints/neox/converted-llama7B-32e",
-  # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32/",
-  # "load_iteration": 5000,
+  "save": "pm:s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_postlocal/",
+  # "load": "./checkpoints/neox/converted-llama7B-32e",
+  "load": "pm:s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_postlocal/",
+  "load_iteration": 65000,
   "tensorboard-dir": "tensorboard/moefication/llama_7b_e32_postlocal/",
-  "log-dir": "./logs",
+  # "log-dir": "./logs",
   "from_dense_to_moe": {
     "do_convert": false,
     "post": "local"
   },
   "moe_num_experts": 32,
-  "ep_world_size": 32,
+  "ep_world_size": 8,
   "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
