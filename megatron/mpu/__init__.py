@@ -16,7 +16,7 @@
 
 from .cross_entropy import vocab_parallel_cross_entropy
 
-from .data import broadcast_data
+from .data import broadcast_data, broadcast_data_on_ep
 
 from .initialize import is_unitialized
 from .initialize import destroy_model_parallel
