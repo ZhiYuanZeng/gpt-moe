@@ -315,14 +315,16 @@ def build_train_valid_test_data_iterators(neox_args):
     if mpu.get_model_parallel_rank() == 0 and pipe_load:
         # Number of train/valid/test samples.
         train_iters = neox_args.train_iters
-        eval_iters = (train_iters // neox_args.eval_interval + 1) * neox_args.eval_iters
+        if train_iters > 0:
+            eval_iters = (train_iters // neox_args.eval_interval + 1) * neox_args.eval_iters
+        else:
+            eval_iters = neox_args.eval_iters # only do valid once, not do train
         test_iters = neox_args.eval_iters
         train_val_test_num_samples = [
             train_iters * neox_args.train_batch_size,
             eval_iters * neox_args.train_batch_size,
             test_iters * neox_args.train_batch_size,
         ]
-
         if neox_args.train_data_paths:
             # when individual train / valid / test data paths are provided
             # normalize weight values and get num samples for each dataset
@@ -456,10 +458,13 @@ def build_train_valid_test_data_iterators(neox_args):
             )
         )
     if valid_dataloader is not None:
-        start_iter_val = (
-            (neox_args.iteration * neox_args.gradient_accumulation_steps)
-            // neox_args.eval_interval
-        ) * neox_args.eval_iters
+        if neox_args.train_iters > 0:
+            start_iter_val = (
+                (neox_args.iteration * neox_args.gradient_accumulation_steps)
+                // neox_args.eval_interval
+            ) * neox_args.eval_iters
+        else:
+            start_iter_val = 0
         valid_dataloader.batch_sampler.start_iter = start_iter_val % len(
             valid_dataloader
         )
