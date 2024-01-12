@@ -406,6 +406,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
     moe_normalize_expert_grad: Literal["sqrt_world_size", "world_size", "no"] = "no"
 
     moe_capacity_factor: float = 1.0
+
+    moe_eval_capacity_factor: float = 1.0
     
     moe_use_residual: bool = False
 
@@ -430,6 +432,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
     moe_gate_st:bool = False
 
     moe_base_layer: bool = False
+
+    moe_drop_tokens: bool = True
 
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):

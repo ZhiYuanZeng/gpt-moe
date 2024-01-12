@@ -29,13 +29,15 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         ep_size=neox_args.ep_world_size,
                         k=neox_args.moe_top_k,
                         capacity_factor=neox_args.moe_capacity_factor,
+                        eval_capacity_factor=neox_args.moe_eval_capacity_factor,
                         use_residual=neox_args.moe_use_residual,
                         min_capacity=neox_args.moe_min_capacity,
                         noisy_gate_policy=neox_args.moe_noisy_gate_policy,
                         aux_loss_weight=neox_args.moe_aux_loss_weight,
                         use_elbo=neox_args.moe_use_elbo,
                         experts=experts,
-                        gate_st=neox_args.moe_gate_st)
+                        gate_st=neox_args.moe_gate_st,
+                        drop_tokens=neox_args.moe_drop_tokens)
         assert neox_args.moe_aux_loss_weight is not None 
         print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
