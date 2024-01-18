@@ -433,11 +433,14 @@ def setup_for_inference_or_eval(
     if overwrite_values:
         _overwrite_values.update(overwrite_values)
     neox_args = NeoXArgs.consume_neox_args(args, overwrite_values=_overwrite_values)
+    # TODO: support loading dense raw weights
+    if neox_args.load_iteration == 0:
+        neox_args.load_iteration = neox_args.train_iters
     neox_args.load = neox_args.save
-    neox_args.load_iteration = neox_args.train_iters
+    neox_args.finetune = False
+    neox_args.ep_world_size = 8
     neox_args.label_data_paths = None
     neox_args.build_tokenizer()
-    neox_args.finetune = False
 
     # if neox_args.load is None:
     #     raise ValueError("`load` parameter must be supplied to load a model`")
