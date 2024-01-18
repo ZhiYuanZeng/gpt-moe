@@ -137,7 +137,13 @@ class LocalPostMoELayer(MOELayer):
 
         if self.unrouted_type == 'all': # both first and second routing are failed
             routed_mask = (dispatch_mask!=0).any(-1).any(-1)
-            combined_output[~routed_mask], _ = self.post_routing(reshaped_inputs[~routed_mask]) # if tokens are unrouted, computed at local devices
+            unrouted_mask = ~routed_mask
+            masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
+            post_routing_outputs, post_routing_expert_indices = self.post_routing(reshaped_inputs[unrouted_mask]) # if tokens are unrouted, computed at local devices
+            post_routing_probs = torch.gather(
+                masked_routing_probs, dim=1, index=post_routing_expert_indices.unsqueeze(dim=-1))
+            combined_output[unrouted_mask] = (post_routing_probs-post_routing_probs.detach()+1) * post_routing_outputs
+            
         elif self.unrouted_type == 'any': # either first or second routing are failed
             combine_weights_sum = dispatch_mask.sum(dim=-1).sum(dim=-1) # number of experts that each token is sent to
             if self.gate.k == 3:
@@ -158,7 +164,7 @@ class LocalPostMoELayer(MOELayer):
             post_routing_probs = torch.gather(
                 masked_routing_probs, dim=1, index=post_routing_expert_indices.unsqueeze(dim=-1))
             assert top1_probs.shape == post_routing_probs.shape, f'{top1_probs.shape=}, {post_routing_probs.shape=}'
-            norm = torch.clamp(top1_probs+post_routing_probs, min=torch.finfo(top1_probs.dtype).eps)
+            norm = torch.clamp(top1_probs+post_routing_probs, min=torch.finfo(top1_probs.dtype).eps).detach()
             combined_output[unrouted_mask] = (post_routing_outputs * post_routing_probs + top1_probs * top1_outputs) / norm
         out = combined_output.reshape(inputs[0].shape)
         
