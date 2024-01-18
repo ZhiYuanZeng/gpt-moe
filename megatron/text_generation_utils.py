@@ -475,7 +475,6 @@ def generate_samples_from_prompt(
 
         terminate_runs = broadcast_terminate_signal(terminate_runs)
         if terminate_runs == 1:
-            model.module.clear_cache()
             return generated_texts
 
         for (

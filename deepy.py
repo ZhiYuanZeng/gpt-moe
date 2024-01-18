@@ -23,7 +23,7 @@ from megatron.neox_arguments import NeoXArgs
 from megatron.utils import get_wandb_api_key
 from train import main
 from tools.ckpts.convert_dense_ckpt_to_moe import main as dense_to_moe_main
-from evaluate import main as eval_main
+from eval import main as eval_main
 
 neox_args = NeoXArgs.consume_deepy_args()
 main_args = neox_args.get_main_args()
