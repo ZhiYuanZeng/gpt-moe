@@ -1,0 +1,31 @@
+TaskName: "一个示例的自定义任务名字"
+# 自定义训练任务描述
+Description: "对这个自定义任务的描述"
+
+ResourceQueueID: "q-20240114171548-l5sn4"
+# distributed framework, support: TensorFlow PS,PyTorch DDP,Horovod,BytePS
+Framework: "PyTorchDDP"
+TaskRoleSpecs:
+    - RoleName: "worker"
+      RoleReplicas: 2
+      Flavor: "ml.hpcpni2l.28xlarge"
+ActiveDeadlineSeconds: 0
+
+# storages
+Storages:
+    - Type: "Vepfs"
+      MountPath: "/fs-computility/llm/shared"
+      SubPath: "llm/shared"
+    - Type: "Vepfs"
+      MountPath: "/fs-computility/llm/zengzhiyuan.d"
+      SubPath: "llm/zengzhiyuan.d"
+
+ImageUrl: "vemlp-cn-shanghai.cr.volces.com/preset-images/pytorch:1.13.1-cu11.7.0-devel-py3.10-ubuntu20.04"
+CacheType: "Cloudfs"
+
+Entrypoint: "echo master_addr=$MLP_WORKER_0_HOST && echo nnodes=${MLP_WORKER_NUM} && echo nproc_per_node=${MLP_WORKER_GPU} && cd /fs-computility/llm/zengzhiyuan.d/gpt-moe \
+&& /fs-computility/llm/zengzhiyuan.d/moe/bin/torchrun --master_addr=$MLP_WORKER_0_HOST  \
+--master_port=$MLP_WORKER_0_PORT   \
+--nproc_per_node=$MLP_WORKER_GPU \
+--nnodes=$MLP_WORKER_NUM  \
+--node_rank=$MLP_ROLE_INDEX demo.py"
