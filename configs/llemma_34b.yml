@@ -104,5 +104,5 @@
    "wandb_host": "https://api.wandb.ai",
 
    "launcher": "slurm",
-   "deepspeed_slurm": true
+   "deepspeed_slurm": false
 }

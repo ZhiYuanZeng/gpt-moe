@@ -97,7 +97,7 @@
   "vocab-file": "data/tokenizers/20B_tokenizer.json",
   "tokenizer_type": "HFTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia1b_finetune_pile00/",
   "load": "./checkpoints/pythia-1b/",
   "load_iteration": 0,

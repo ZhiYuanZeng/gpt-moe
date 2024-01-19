@@ -102,7 +102,7 @@
   "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   
   "do_train": 0,
   "do_valid": 1,

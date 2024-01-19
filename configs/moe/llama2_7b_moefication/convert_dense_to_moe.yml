@@ -104,7 +104,7 @@
   "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   "log-dir": "./logs",
   "no_load_optim": true,
   "from_dense_to_moe": { # only be used for convert ckpts from dense to moe offline

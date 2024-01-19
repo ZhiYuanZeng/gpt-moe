@@ -105,7 +105,7 @@
   "merge-file": "data/gpt2-merges.txt",
 
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer",
   # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer/",
   "tensorboard-dir": "tensorboard/moe/sharelayer/llama_moe_7b_64e_from_scratch_topk2_loadbalance0.01_sharelayer_reimplement",

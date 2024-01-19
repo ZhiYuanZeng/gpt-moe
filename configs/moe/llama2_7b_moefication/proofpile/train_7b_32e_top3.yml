@@ -105,7 +105,7 @@
   "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   
   "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_top3_orca/",
   "load": "./checkpoints/neox/converted-llama2-7B-32e",

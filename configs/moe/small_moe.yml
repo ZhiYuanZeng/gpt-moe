@@ -58,7 +58,7 @@
   "keep-last-n-checkpoints": 4,
   "wall_clock_breakdown": true,
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   "moe_num_experts": 16,
   "ep_world_size": 16,
   "moe_top_k": 2,

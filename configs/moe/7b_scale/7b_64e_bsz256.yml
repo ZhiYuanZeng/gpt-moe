@@ -105,7 +105,7 @@
   "merge-file": "data/gpt2-merges.txt",
 
   "launcher": "slurm",
-  "deepspeed_slurm": true,
+  "deepspeed_slurm": false,
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/moe/scale/7b_64e_bsz256",
   "tensorboard-dir": "tensorboard/moe/scale/7b_64e_bsz256",
   "log-dir": "./logs",

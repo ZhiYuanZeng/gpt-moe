@@ -32,7 +32,7 @@ bash /helper/script/write_hostfile.sh
 export DLTS_HOSTFILE=path/to/hostfile/hosts_$SLURM_JOBID
 
 
-# launch distributed job. If using `"deepspeed_slurm": true` and `"launcher": "slurm"` on a SLURM cluster, 
+# launch distributed job. If using `"deepspeed_slurm": false` and `"launcher": "slurm"` on a SLURM cluster, 
 # then NeoX will handle the creation of a distributed run across 256 gpus.
 python $TRAIN_PATH/deepy.py $TRAIN_PATH/train.py \
         --conf_dir /path/to/math-lm/pretraining llemma_34b.yml data_mixture.yml   
