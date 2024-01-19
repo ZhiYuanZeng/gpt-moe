@@ -90,10 +90,10 @@
    "steps_per_print": 10,
    "wall_clock_breakdown": true,
 
-  "train-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
-  "label-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_label_document"],
-  "valid-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
-  "test-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
+  "train-data-paths": ["./data/openorca/_text_document"],
+  "label-data-paths": ["./data/openorca/_label_document"],
+  "valid-data-paths": ["./data/openorca/_text_document"],
+  "test-data-paths": ["./data/openorca/_text_document"],
   # "valid-data-paths": ["./data/slimpajama/slimpajama_llama/dev_text_document"],
   # "test-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
 
