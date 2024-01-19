@@ -27,11 +27,6 @@
   "mlp_type": "llama",
   "activation": "silu",
 
-   # init methods
-   "init_method": "small_init",
-   "output_layer_init_method": "wang_init",
-
-   # optimizer settings
    "optimizer": {
      "type": "Adam",
      "params": {
@@ -45,7 +40,7 @@
 
    # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
    "zero_optimization": {
-    "stage": 2,
+    "stage": 1,
     "allgather_partitions": True,
     "allgather_bucket_size": 500000000,
     "overlap_comm": True,
@@ -82,51 +77,34 @@
    },
 
    # misc. training settings
-   "train_iters": 10000,
-   "lr_decay_iters": 10000,
+   "train_iters": 20000,
+   "lr_decay_iters": 20000,
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
-   "warmup_iters": 1000,
-   "checkpoint_factor": 5000,
-   "eval_iters": -1,
+   "warmup_iters": 2000,
+   "checkpoint_factor": 2500,
+   "eval_interval": 250,
+   "eval_iters": 50,
 
    # logging
    "log_interval": 1,
    "steps_per_print": 10,
    "wall_clock_breakdown": true,
 
-  "train-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
-  "label-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_label_document"],
-  "valid-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
-  "test-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
-  # "valid-data-paths": ["./data/slimpajama/slimpajama_llama/dev_text_document"],
-  # "test-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
+  "train-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/algebraic-stack-train_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/arxiv-train_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/open-web-math-train_text_document"],
+  "valid-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/algebraic-stack-validation_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/arxiv-validation_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/open-web-math-validation_text_document"],
+  "test-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/algebraic-stack-test_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/arxiv-test_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/open-web-math-test_text_document"],
 
   "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": true,
-  
-  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_top2",
-  "load": "./checkpoints/neox/converted-llama2-7B-32e",
+  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_dense_proofpile/",
+  "load": "./checkpoints/neox/llama2_7B",
   "finetune": true,
-  "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_top2",
-  # "log-dir": "./logs",
 
-  "from_dense_to_moe": {
-    "do_convert": false,
-  },
-  "moe_num_experts": 32,
-  "ep_world_size": 32,
-  "moe_top_k": 2,
-  "moe_min_capacity": 0,
-  "moe_freq": 2,
-  "moe_aux_loss_weight": {
-    "load_balance": 0.01,
-    "zloss": 0,
-    "entropy": 0,
-    "kl_div": 0
-  },
-  "use_wandb": false,
+  "load_iteration": 0,
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_dense_proofpile/",
+  "use_wandb": false
+  # "log-dir": "./logs",
 }

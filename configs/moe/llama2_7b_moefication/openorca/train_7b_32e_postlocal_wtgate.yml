@@ -15,7 +15,7 @@
   "gpt_j_residual": false,
   "output_layer_parallelism": "column",
   "norm": "rmsnorm",
-  "rms_norm_epsilon": 1.0e-6,
+  "rms_norm_epsilon": 1.0e-5,
 
   "attention_config": [[["flash"], 32]],
 
@@ -33,13 +33,26 @@
 
    # optimizer settings
    "optimizer": {
-     "type": "adam",
+     "type": "Adam",
      "params": {
-       "lr": 0.00001,
+       "lr": 1.0e-5,
        "betas": [0.9, 0.95],
        "eps": 1.0e-8,
      }
    },
+   "min_lr": 1.0e-6,
+
+
+   # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
+   "zero_optimization": {
+    "stage": 1,
+    "allgather_partitions": True,
+    "allgather_bucket_size": 500000000,
+    "overlap_comm": True,
+    "reduce_scatter": True,
+    "reduce_bucket_size": 500000000,
+    "contiguous_gradients": True,
+  },
 
    # batch / data settings
    "train_batch_size": 256,
@@ -69,43 +82,45 @@
    },
 
    # misc. training settings
-   "train_iters": -1,
-   "lr_decay_iters": 65000,
+   "train_iters": 2000,
+   "lr_decay_iters": 10000,
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
-   "warmup_iters": 2000,
+   "warmup_iters": 1000,
    "checkpoint_factor": 5000,
-   "eval_interval": 1000,
+   "eval_iters": -1,
 
    # logging
    "log_interval": 1,
    "steps_per_print": 10,
    "wall_clock_breakdown": true,
 
-  "train-data-paths": ["data/slimpajama/chunk1_text_document"],
-  "valid-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
-  "test-data-paths": ["./data/benchmark_text/dev_text_document"],
+  "train-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
+  "label-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_label_document"],
+  "valid-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
+  "test-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/openorca/_text_document"],
+  # "valid-data-paths": ["./data/slimpajama/slimpajama_llama/dev_text_document"],
+  # "test-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
 
-  "vocab-file": "./tokenizers/llama_tokenizer/model",
+  "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": False,
+  "deepspeed_slurm": true,
   
-  "do_train": 0,
-  "do_valid": 1,
-  "do_test": 0, 
-
-  "load": "pm:s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_top2/",
-  "load_iteration": 60000,
-  "no_load_optim": true, # not load optimizer
-  "eval_results_prefix": "eval_results/llama1_e32_top2",
+  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_postlocal_wtgates_orca/",
+  "load": "./checkpoints/neox/converted-llama2-7B-32e",
+  "finetune": true,
+  "load_iteration": 0,
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_postlocal_wtgates_orca/",
+  # "log-dir": "./logs",
 
   "from_dense_to_moe": {
     "do_convert": false,
+    "post": "local"
   },
   "moe_num_experts": 32,
-  "ep_world_size": 8,
-  "moe_top_k": 2,
+  "ep_world_size": 32,
+  "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
   "moe_aux_loss_weight": {

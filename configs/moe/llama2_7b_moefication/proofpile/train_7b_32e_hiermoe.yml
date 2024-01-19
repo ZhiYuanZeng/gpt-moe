@@ -33,13 +33,25 @@
 
    # optimizer settings
    "optimizer": {
-     "type": "adam",
+     "type": "Adam",
      "params": {
-       "lr": 0.00001,
+       "lr": 8.0e-6,
        "betas": [0.9, 0.95],
        "eps": 1.0e-8,
      }
    },
+
+   # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
+   "zero_optimization": {
+    "stage": 1,
+    "allgather_partitions": True,
+    "allgather_bucket_size": 500000000,
+    "overlap_comm": True,
+    "reduce_scatter": True,
+    "reduce_bucket_size": 500000000,
+    "contiguous_gradients": True,
+  },
+   "min_lr": 0.0000012,
 
    # batch / data settings
    "train_batch_size": 256,
@@ -69,7 +81,7 @@
    },
 
    # misc. training settings
-   "train_iters": -1,
+   "train_iters": 65000,
    "lr_decay_iters": 65000,
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
@@ -83,29 +95,30 @@
    "wall_clock_breakdown": true,
 
   "train-data-paths": ["data/slimpajama/chunk1_text_document"],
-  "valid-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
-  "test-data-paths": ["./data/benchmark_text/dev_text_document"],
+  "valid-data-paths": ["./data/slimpajama/slimpajama_llama/dev_text_document"],
+  "test-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
 
-  "vocab-file": "./tokenizers/llama_tokenizer/model",
+  "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": False,
+  "deepspeed_slurm": true,
   
-  "do_train": 0,
-  "do_valid": 1,
-  "do_test": 0, 
-
-  "load": "pm:s3://P_model_weights/zengzhiyuan/checkpoints/moefication/llama_7b_e32_top2/",
-  "load_iteration": 60000,
-  "no_load_optim": true, # not load optimizer
-  "eval_results_prefix": "eval_results/llama1_e32_top2",
+  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_hiermoe/",
+  "load": "./checkpoints/neox/converted-llama2-7B-32e",
+  # "load": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_hiermoe/",
+  "load_iteration": 0,
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_hiermoe/",
+  # "log-dir": "./logs",
 
   "from_dense_to_moe": {
     "do_convert": false,
+    "hier_moe": {
+      "inside_k":1
+    }
   },
   "moe_num_experts": 32,
-  "ep_world_size": 8,
-  "moe_top_k": 2,
+  "ep_world_size": 32,
+  "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
   "moe_aux_loss_weight": {
