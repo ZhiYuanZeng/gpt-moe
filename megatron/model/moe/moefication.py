@@ -91,10 +91,7 @@ class LocalPostMoELayer(MOELayer):
         assert_all_experts_are_same(experts)
         super().__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel, use_elbo)
         self.unrouted_type=unrouted_type
-        self.ep_rank = torch.distributed.get_rank(self.ep_group)
-        self.ep_world_size = torch.distributed.get_world_size(self.ep_group)
-        self.num_experts = self.ep_world_size * self.num_local_experts
-        assert self.num_experts == self.gate.wg.weight.shape[0]
+        self.num_experts = self.gate.wg.weight.shape[0]
 
     @classmethod
     def from_moe_layer(cls, moe_layer:MOELayer):
@@ -171,6 +168,10 @@ class LocalPostMoELayer(MOELayer):
         return out
     
     def post_routing(self, inputs:Tensor):
+        self.ep_rank = torch.distributed.get_rank(self.ep_group)
+        self.ep_world_size = torch.distributed.get_world_size(self.ep_group)
+        assert self.ep_world_size * self.num_local_experts == self.num_experts, f"{self.ep_world_size=}, {self.num_local_experts=}"
+
         num_tokens = inputs.shape[0]
         assert num_tokens % self.num_local_experts == 0
         num_tokens_per_experts = inputs.shape[0] // self.num_local_experts
