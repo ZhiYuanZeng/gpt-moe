@@ -298,7 +298,7 @@ class NeoXArgs(*BASE_CLASSES):
             help="Optionally overwrite eval tasks to run for evaluate.py",
         )
         group.add_argument(
-            "--iteration",
+            "--load_iteration",
             type=int,
             default=None,
             help="Iteration to load checkpoint from in evaluate.py / generate.py. If None is provided, uses the latest iteration.",

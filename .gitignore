@@ -160,3 +160,5 @@ train_scripts/
 
 eval_results/
 eval_scripts/
+
+tokenizers/
