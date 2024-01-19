@@ -99,7 +99,7 @@
   "valid-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
   "test-data-paths": ["./data/benchmark_text/dev_text_document"],
 
-  "vocab-file": "/mnt/petrelfs/share_data/llm_llama2/llm_llama2/llama-2-7b-hf/tokenizer.model",
+  "vocab-file": "./tokenizers/llama_tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": false,

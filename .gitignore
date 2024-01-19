@@ -162,3 +162,4 @@ eval_results/
 eval_scripts/
 
 tokenizers/
+exact_match/

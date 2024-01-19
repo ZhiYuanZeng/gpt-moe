@@ -100,7 +100,7 @@
   "valid-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/algebraic-stack-validation_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/arxiv-validation_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/open-web-math-validation_text_document"],
   "test-data-paths": ["/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/algebraic-stack-test_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/arxiv-test_text_document", "/mnt/inspurfs/zengzhiyuan/gpt-moe/data/proofpile2/open-web-math-test_text_document"],
 
-  "vocab-file": "./tokenizers/tokenizer.model",
+  "vocab-file": "./tokenizers/llama_tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": false,
