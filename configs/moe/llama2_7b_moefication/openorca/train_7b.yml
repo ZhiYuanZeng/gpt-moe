@@ -101,7 +101,7 @@
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": false,
-  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_dense_orca/",
+  "save": "./checkpoints/moefication/llama2_7b_dense_orca/",
   "load": "./checkpoints/neox/llama2_7B",
   "finetune": true,
 

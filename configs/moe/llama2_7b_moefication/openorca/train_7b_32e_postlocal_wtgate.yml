@@ -107,7 +107,7 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_postlocal_wtgates_orca/",
+  "save": "./checkpoints/moefication/llama2_7b_32e_postlocal_wtgates_orca/",
   "load": "./checkpoints/neox/converted-llama2-7B-32e",
   "finetune": true,
   "load_iteration": 0,

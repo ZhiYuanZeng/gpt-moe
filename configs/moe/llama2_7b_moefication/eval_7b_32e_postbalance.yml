@@ -106,8 +106,8 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  # "save": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_balanced/",
-  "load": "s3://zengzhiyuan_openlmlab/checkpoints/moefication/llama2_7b_32e_balanced/",
+  # "save": "./checkpoints/moefication/llama2_7b_32e_balanced/",
+  "load": "./checkpoints/moefication/llama2_7b_32e_balanced/",
   "load_iteration": 5000,
   # "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_post_balanced/",
   # "log-dir": "./logs",
