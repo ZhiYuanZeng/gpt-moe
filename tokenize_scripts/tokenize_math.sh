@@ -7,9 +7,10 @@ TOKENIZER_TYPE=SPMTokenizer
 # mask_tokens="5519,12015,12336,5262"
 
 
-# MYDATA="../proof_pile/dev/"
-# OUTPUT_PREFIX="./data/proofpile/dev"
-# srun -p llm_t -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
+
+# MYDATA="/mnt/petrelfs/share_data/feizhaoye/huggingface/dataset/proof-pile-2/open-web-math/train/"
+# OUTPUT_PREFIX="./data/proofpile2/open-web-math-train"
+# srun -p llm_o -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
 #             --input ${MYDATA} \
 #             --output-prefix ${OUTPUT_PREFIX} \
 #             --tokenizer-type ${TOKENIZER_TYPE} \
@@ -17,11 +18,12 @@ TOKENIZER_TYPE=SPMTokenizer
 #             --dataset-impl mmap \
 #             --append-eod \
 #             --workers 64 \
-#             --content-key content
+#             --content-key text
 
-# MYDATA="../proof_pile/test/"
-# OUTPUT_PREFIX="./data/proofpile/dev"
-# srun -p llm_t -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
+
+# MYDATA="/mnt/petrelfs/share_data/feizhaoye/huggingface/dataset/proof-pile-2/open-web-math/validation/"
+# OUTPUT_PREFIX="./data/proofpile2/open-web-math-validation"
+# srun -p llm_o -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
 #             --input ${MYDATA} \
 #             --output-prefix ${OUTPUT_PREFIX} \
 #             --tokenizer-type ${TOKENIZER_TYPE} \
@@ -29,33 +31,7 @@ TOKENIZER_TYPE=SPMTokenizer
 #             --dataset-impl mmap \
 #             --append-eod \
 #             --workers 64 \
-#             --content-key content
-
-
-MYDATA="/mnt/petrelfs/share_data/feizhaoye/huggingface/dataset/proof-pile-2/open-web-math/train/"
-OUTPUT_PREFIX="./data/proofpile2/open-web-math-train"
-srun -p llm_o -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
-            --input ${MYDATA} \
-            --output-prefix ${OUTPUT_PREFIX} \
-            --tokenizer-type ${TOKENIZER_TYPE} \
-            --vocab ${VOCAB} \
-            --dataset-impl mmap \
-            --append-eod \
-            --workers 64 \
-            --content-key text
-
-
-MYDATA="/mnt/petrelfs/share_data/feizhaoye/huggingface/dataset/proof-pile-2/open-web-math/validation/"
-OUTPUT_PREFIX="./data/proofpile2/open-web-math-validation"
-srun -p llm_o -n 1 --cpus-per-task 64 --gpus-per-task 0 python tools/datasets/preprocess_data.py \
-            --input ${MYDATA} \
-            --output-prefix ${OUTPUT_PREFIX} \
-            --tokenizer-type ${TOKENIZER_TYPE} \
-            --vocab ${VOCAB} \
-            --dataset-impl mmap \
-            --append-eod \
-            --workers 64 \
-            --content-key text
+#             --content-key text
 
 
 MYDATA="/mnt/petrelfs/share_data/feizhaoye/huggingface/dataset/proof-pile-2/open-web-math/test/"
