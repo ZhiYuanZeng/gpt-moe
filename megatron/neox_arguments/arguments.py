@@ -304,6 +304,12 @@ class NeoXArgs(*BASE_CLASSES):
             help="Iteration to load checkpoint from in evaluate.py / generate.py. If None is provided, uses the latest iteration.",
         )
         group.add_argument(
+            "--load_for_eval",
+            type=str,
+            default=None,
+            help="",
+        )
+        group.add_argument(
             "--eval_results_prefix",
             type=str,
             default=None,

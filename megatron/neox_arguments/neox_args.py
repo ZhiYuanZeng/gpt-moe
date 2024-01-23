@@ -877,6 +877,11 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     """
     Directory containing a model checkpoint.
     """
+
+    load_for_eval: str = None
+    """
+    Directory containing a model checkpoint. Only work for evaluation if you want to overide the load dir in config file
+    """
     
     load_iteration: int = None
     """

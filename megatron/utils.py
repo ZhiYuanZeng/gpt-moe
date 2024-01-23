@@ -429,21 +429,23 @@ def setup_for_inference_or_eval(
         "no_load_optim": True,
         "optimizer": None,  # prevent loading optimizer (no_load_optim alone won't work)
         "zero_optimization": None,  # disable zero optimization (won't be used in inference, and loading zero optimizer can cause errors)
+        "no_load_rng": True,
+        "finetune": False,
+        "ep_world_size": 8,
+        "label_data_paths": None
     }
     if overwrite_values:
         _overwrite_values.update(overwrite_values)
     neox_args = NeoXArgs.consume_neox_args(args, overwrite_values=_overwrite_values)
     # TODO: support loading dense raw weights
-    if neox_args.load_iteration == 0:
-        neox_args.load_iteration = neox_args.train_iters
-    neox_args.load = neox_args.save
-    neox_args.finetune = False
-    neox_args.ep_world_size = 8
-    neox_args.label_data_paths = None
+    if neox_args.load_for_eval is not None:
+        neox_args.load = neox_args.load_for_eval
+    else:
+        neox_args.load = neox_args.save
     neox_args.build_tokenizer()
 
-    # if neox_args.load is None:
-    #     raise ValueError("`load` parameter must be supplied to load a model`")
+    if neox_args.load is None:
+        raise ValueError("`load` parameter must be supplied to load a model`")
 
     # initialize wandb
     init_wandb(neox_args=neox_args)
