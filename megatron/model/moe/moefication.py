@@ -106,7 +106,7 @@ class LocalPostMoELayer(MOELayer):
         # group_size = kwargs['group_size'] if 'group_size' in kwargs.keys() else 1
         reshaped_inputs = inputs[0].reshape(-1, d_model)
 
-        self.l_aux, combine_weights, dispatch_mask, self.exp_counts, routing_probs = self.gate(
+        self.l_aux, combine_weights, dispatch_mask, self.exp_counts, routing_probs, topk_norm = self.gate(
             reshaped_inputs, inputs[1], return_gates=True)
         dispatched_inputs = einsum(
             "sec,sm->ecm", dispatch_mask.type_as(inputs[0]), reshaped_inputs
@@ -132,37 +132,26 @@ class LocalPostMoELayer(MOELayer):
         
         combined_output = einsum("sec,ecm->sm", combine_weights.type_as(inputs[0]), expert_output)
 
-        if self.unrouted_type == 'all': # both first and second routing are failed
-            routed_mask = (dispatch_mask!=0).any(-1).any(-1)
-            unrouted_mask = ~routed_mask
-            masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
-            post_routing_outputs, post_routing_expert_indices = self.post_routing(reshaped_inputs[unrouted_mask]) # if tokens are unrouted, computed at local devices
-            post_routing_probs = torch.gather(
-                masked_routing_probs, dim=1, index=post_routing_expert_indices.unsqueeze(dim=-1))
-            combined_output[unrouted_mask] = (post_routing_probs-post_routing_probs.detach()+1) * post_routing_outputs
-            
-        elif self.unrouted_type == 'any': # either first or second routing are failed
-            combine_weights_sum = dispatch_mask.sum(dim=-1).sum(dim=-1) # number of experts that each token is sent to
-            if self.gate.k == 3:
-                routed_mask = (combine_weights_sum >= 2) # for top3 routing, we are actually doing top2 routing, only few of tokens are processed by the third expert
-            else:
-                routed_mask = (combine_weights_sum >= self.gate.k) # TODO: combine k=3 and post routing
-            unrouted_mask = ~routed_mask
-            masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
+        combine_weights_sum = dispatch_mask.sum(dim=-1).sum(dim=-1) # number of experts that each token is sent to
+        if self.unrouted_type == 'all': # only tokens dropped at all top-k routings are post routed
+            routed_mask = (combine_weights_sum == 0)
+        elif self.unrouted_type == 'any': # any dropped tokens are post routed
+            routed_mask = (combine_weights_sum == self.gate.k) 
+        elif self.unrouted_type == 'ignore_kth': # ignore the dropped tokens at the kth routing. only consider the dropped tokens at top-(k-1) routings
+            routed_mask = (combine_weights_sum >= self.k-1) # assume that the dropped routing must be the kth routing
+        unrouted_mask = ~routed_mask
+        masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
 
-            # we do not need to consider second experts routing, since the first routing is in prior
-            # the unrouted routing must be the second routing or both first and second routng
-            gates_mask = combine_weights_sum[unrouted_mask] > 0 # among unrouted tokens, which tokens are totally unrouted, which are partially unrouted
-            top1_probs = torch.max(masked_routing_probs, dim=-1, keepdim=True).values * gates_mask.unsqueeze(dim=-1) # routing probs of successfully top1-routing tokens
-            top1_outputs = combined_output[unrouted_mask]
+        # postprocess unrouted tokens
+        post_routing_outputs, post_routing_probs = self.post_routing(reshaped_inputs[unrouted_mask], masked_routing_probs)
 
-            # postprocess unrouted tokens
-            post_routing_outputs, post_routing_expert_indices = self.post_routing(reshaped_inputs[unrouted_mask])
-            post_routing_probs = torch.gather(
-                masked_routing_probs, dim=1, index=post_routing_expert_indices.unsqueeze(dim=-1))
-            assert top1_probs.shape == post_routing_probs.shape, f'{top1_probs.shape=}, {post_routing_probs.shape=}'
-            norm = torch.clamp(top1_probs+post_routing_probs, min=torch.finfo(top1_probs.dtype).eps).detach()
-            combined_output[unrouted_mask] = (post_routing_outputs * post_routing_probs + top1_probs * top1_outputs) / norm
+        # normalization
+        topk_norm = topk_norm[unrouted_mask]
+        assert topk_norm.shape == post_routing_probs.shape, f'{topk_norm.shape=}, {post_routing_probs.shape=}'
+        new_norm = torch.clamp(topk_norm+post_routing_probs * (self.gate.k-combine_weights_sum[unrouted_mask]), 
+                               min=torch.finfo(combine_weights.dtype).eps).detach()
+        combined_output[unrouted_mask] = (
+            post_routing_outputs * post_routing_probs + topk_norm * combined_output[unrouted_mask]) / new_norm
         out = combined_output.reshape(inputs[0].shape)
         
         return out
@@ -177,7 +166,7 @@ class LocalPostMoELayer(MOELayer):
         local_routing_scores = routing_scores[:, expert_indices]
 
         if self.num_local_experts == 1:           
-            return self.experts(inputs), local_routing_scores
+            return self.experts(inputs), local_routing_scores.squeeze(dim=-1)
         else:
             # top1 routing inside gpu
             top1_routing_scores, top1_routing_indices = torch.max(
