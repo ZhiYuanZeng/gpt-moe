@@ -167,19 +167,26 @@ class LocalPostMoELayer(MOELayer):
         
         return out
     
-    def post_routing(self, inputs:Tensor):
+    def post_routing(self, inputs:Tensor, routing_scores):
+        assert inputs.shape[0] == routing_scores.shape[0]
         self.ep_rank = torch.distributed.get_rank(self.ep_group)
         self.ep_world_size = torch.distributed.get_world_size(self.ep_group)
         assert self.ep_world_size * self.num_local_experts == self.num_experts, f"{self.ep_world_size=}, {self.num_local_experts=}"
+        
+        expert_indices = [i+self.ep_rank * self.num_local_experts for i in range(self.num_local_experts)]
+        local_routing_scores = routing_scores[:, expert_indices]
 
-        num_tokens = inputs.shape[0]
-        assert num_tokens % self.num_local_experts == 0
-        num_tokens_per_experts = inputs.shape[0] // self.num_local_experts
-        local_expert_indices = torch.tensor(
-            [i//num_tokens_per_experts for i in range(inputs.shape[0])], device=inputs.device)
-        global_expert_indices = self.ep_rank * self.num_local_experts + local_expert_indices
-        assert torch.all(global_expert_indices < self.num_experts), f'{self.ep_rank=}, {self.num_local_experts=}, {local_expert_indices=}'
-        return self.experts(inputs.unsqueeze(dim=0)).squeeze(dim=0), global_expert_indices
+        if self.num_local_experts == 1:           
+            return self.experts(inputs), local_routing_scores
+        else:
+            # top1 routing inside gpu
+            top1_routing_scores, top1_routing_indices = torch.max(
+                local_routing_scores, dim=-1)
+
+            y = torch.empty_like(inputs)
+            for i, expert in enumerate(self.experts.deepspeed_experts):
+                y[top1_routing_indices == i] = expert(inputs[top1_routing_indices == i])
+            return y, top1_routing_scores
 
 class BaseLayerNoStateDict(BaseLayer):
     def state_dict(self, *args, **kwargs):
