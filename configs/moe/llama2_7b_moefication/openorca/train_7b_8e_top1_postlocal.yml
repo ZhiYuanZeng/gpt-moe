@@ -45,7 +45,7 @@
 
    # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
    "zero_optimization": {
-    "stage": 1,
+    "stage": 2,
     "allgather_partitions": True,
     "allgather_bucket_size": 500000000,
     "overlap_comm": True,
@@ -87,7 +87,7 @@
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
    "warmup_iters": 1000,
-   "checkpoint_factor": 5000,
+   "checkpoint_factor": 2500,
    "eval_iters": -1,
 
    # logging
@@ -107,18 +107,20 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "./checkpoints/moefication/llama2_7b_32e_st",
-  "load": "./checkpoints/neox/converted-llama2-7B-32e",
-  "finetune": true,
-  "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_st_fixbug_orca/",
+  "save": "./checkpoints/moefication/llama2_7b_8e_top1_postlocal",
+  "load": "./checkpoints/moefication/llama2_7b_8e_top1_postlocal",
+  # "finetune": true,
+  "load_iteration": 5000,
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top1_postlocal",
   # "log-dir": "./logs",
 
   "from_dense_to_moe": {
     "do_convert": false,
+    "post": "local",
+    "unrouted_type": "all"
   },
-  "moe_num_experts": 32,
-  "ep_world_size": 32,
+  "moe_num_experts": 8,
+  "ep_world_size": 8,
   "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
@@ -128,6 +130,5 @@
     "entropy": 0,
     "kl_div": 0
   },
-  "use_wandb": false,
-  "moe_gate_st": true
+  "use_wandb": false
 }
