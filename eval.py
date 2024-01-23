@@ -31,28 +31,11 @@ from datetime import datetime
 import json
 from deepspeed.utils.logging import logger
 import torch
-
-class RemoveProxy:
-    def __enter__(self):
-        self.http_proxy = os.environ.get('http_proxy', "")
-        self.https_proxy = os.environ.get('https_proxy', "")
-        self.HTTP_PROXY = os.environ.get('HTTP_PROXY', "")
-        self.HTTPS_PROXY = os.environ.get('HTTPS_PROXY', "")
-        os.environ['http_proxy'] = ""
-        os.environ['https_proxy'] = ""
-        os.environ['HTTP_PROXY'] = ""
-        os.environ['HTTPS_PROXY'] = ""
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        os.environ['http_proxy'] = self.http_proxy
-        os.environ['https_proxy'] = self.https_proxy
-        os.environ['HTTP_PROXY'] = self.HTTP_PROXY
-        os.environ['HTTPS_PROXY'] = self.HTTPS_PROXY
         
 def main(args):
+    print(args)
     logger.info(f"{os.environ['http_proxy']=}")
-    with RemoveProxy():
-        model, neox_args = setup_for_inference_or_eval(args, use_cache=False)
+    model, neox_args = setup_for_inference_or_eval(args, use_cache=False)
     logger.info(f"{os.environ['http_proxy']=}")
     results = run_eval_harness(
         model,
@@ -88,7 +71,7 @@ def main(args):
         if neox_args.eval_results_prefix:
             results_path = f"{neox_args.eval_results_prefix}_{results_path}"
         with open(results_path, "w") as f:
-            json.dump(results, f, indent=4)
+            json.dump(results, f, indent=4, default=lambda x: None)
 
 if __name__ == "__main__":
     main()
