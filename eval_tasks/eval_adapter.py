@@ -127,7 +127,7 @@ class EvalHarnessAdapter(HFLM):
     def world_size(self):
         return 1
 
-    def tok_encode(self, string: str):
+    def tok_encode(self, string: str, **kwargs):
         return self.tokenizer.encode(string)
 
     def tok_decode(self, tokens, **kwargs):
@@ -433,7 +433,6 @@ class EvalHarnessAdapter(HFLM):
         def pattern_match(patterns, source_list):
             task_names = set()
             for pattern in patterns:
-                assert pattern in source_list, source_list
                 for matching in fnmatch.filter(source_list, pattern):
                     task_names.add(matching)
             return list(task_names)
@@ -494,7 +493,7 @@ class EvalHarnessAdapter(HFLM):
         results = evaluator.evaluate(
             lm=lm,
             task_dict=task_dict,
-            limit=10, #limit,
+            limit=limit,
             bootstrap_iters=bootstrap_iters,
             log_samples=False,
         )
