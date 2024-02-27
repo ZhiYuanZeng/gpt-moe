@@ -111,7 +111,6 @@ class BaseLayer(MOELayer):
     @classmethod
     def from_moe_layer(cls, moe_layer:MOELayer):
         experts = LocalExperts.from_existing_experts(moe_layer.experts, expert_group_name=moe_layer.ep_group_name)
-        assert torch.allclose(moe_layer.experts.deepspeed_experts[0].w1.weight, experts.deepspeed_experts[0].w1.weight)
         return cls(moe_layer.gate, experts, moe_layer.ep_group_name, moe_layer.ep_size, moe_layer.num_local_experts)
 
     def __init__(self,
@@ -123,8 +122,12 @@ class BaseLayer(MOELayer):
                  use_tutel: bool = False,
                  use_elbo = False) -> None:
         super(BaseLayer, self).__init__(gate, experts, ep_group_name, ep_size, num_local_experts, use_tutel=use_tutel, use_elbo=use_elbo)
-        self.gate = BaseLayerGate(gate.wg, gate_st=gate.gate_st)
+        self.gate = BaseLayerGate(gate.wg, gate_st=gate.gate_st, ep_group=self.ep_group)
         self.shuffle=False
+
+    def _set_ep_group(self, ep_group):
+        self.ep_group = ep_group
+        self.gate.ep_group = ep_group
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
         features = input[0].reshape(-1, input[0].size(-1))
@@ -133,12 +136,12 @@ class BaseLayer(MOELayer):
         if self.shuffle and is_training:
             # Send each token to a random worker, to break correlations within the batch
             shuffle_sort = torch.randperm(features.size(0), device=features.device)
-            features = All2All.apply(features[shuffle_sort])
+            features = All2All.apply(features[shuffle_sort], self.ep_group)
         sort_by_expert, input_splits, output_splits, routing_probs = self.gate(features, is_training=True)
         # Swap these tokens for the right ones for our expert
         dispatched_input = features[sort_by_expert]
         routed_features = All2All.apply(
-            dispatched_input, input_splits, output_splits
+            dispatched_input, self.ep_group, input_splits, output_splits
         )
         
         if self.num_local_experts > 1:
@@ -146,13 +149,13 @@ class BaseLayer(MOELayer):
         expert_outout = self.experts(routed_features, input_split=None)
             
         # Return to original worker and ordering
-        expert_outout = All2All.apply(expert_outout, output_splits, input_splits)
+        expert_outout = All2All.apply(expert_outout, self.ep_group, output_splits, input_splits)
         recovered_outout = expert_outout[inverse_sort(sort_by_expert)] # (s,d)
         combined_outout = routing_probs.type_as(recovered_outout) * recovered_outout
 
         if self.shuffle and is_training:
             # Undo shuffling
-            combined_outout = All2All.apply(combined_outout)[inverse_sort(shuffle_sort)]
+            combined_outout = All2All.apply(combined_outout, self.ep_group)[inverse_sort(shuffle_sort)]
         self.l_aux = torch.tensor(0.).type_as(combined_outout)
         self.exp_counts = {}
         combined_outout = combined_outout.view_as(input[0])
@@ -166,13 +169,13 @@ def inverse_sort(order):
 
 
 class BaseLayerGate(nn.Module):
-    def __init__(self, wg, gate_st):
+    def __init__(self, wg, gate_st, ep_group):
         super().__init__()
         self.num_workers = wg.weight.shape[0]
         self.wg = wg
         self.gate_st = gate_st
-        torch.nn.init.orthogonal_(self.wg.weight.data, gain=0.1)
         self.cpp_balanced_assignment = self._load_assignment()
+        self.ep_group = ep_group
 
     def forward(self, features, is_training, *args, **kwargs):
         if self.wg.weight.dtype != torch.float32:
@@ -220,7 +223,7 @@ class BaseLayerGate(nn.Module):
             scores[~ok] = scores[ok].min()
         
         input_split = [scores.shape[0] // scores.shape[1] for i in range(self.num_workers)]
-        output_split = All2All.apply(torch.tensor(input_split, device=scores.device)).tolist()
+        output_split = All2All.apply(torch.tensor(input_split, device=scores.device), self.ep_group).tolist()
         return self.cpp_balanced_assignment(scores, False), input_split, output_split
     
     # Assigns each token to the top k experts
@@ -238,7 +241,7 @@ class BaseLayerGate(nn.Module):
         assert len(input_splits) == scores.shape[-1]
         assert input_splits.sum() == scores.shape[0]
         # Tell other workers how many tokens to expect from us
-        output_splits = All2All.apply(input_splits)
+        output_splits = All2All.apply(input_splits, self.ep_group)
         return worker2token, input_splits.tolist(), output_splits.tolist()
 
     def _load_assignment(self):
@@ -255,17 +258,17 @@ class BaseLayerGate(nn.Module):
 # Wraps torch.distributed.all_to_all_single as a function that supports autograd
 class All2All(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, xs, input_splits=None, output_splits=None):
+    def forward(ctx, xs, group=None, input_splits=None, output_splits=None):
         ctx.input_splits = input_splits
         ctx.output_splits = output_splits
-
+        ctx.group = group
         ys = (
             torch.empty_like(xs)
             if output_splits is None
             else xs.new_empty(size=[sum(output_splits)] + list(xs.size()[1:]))
         )
         torch.distributed.all_to_all_single(
-            ys, xs, output_split_sizes=output_splits, input_split_sizes=input_splits
+            ys, xs, output_split_sizes=output_splits, input_split_sizes=input_splits, group=group
         )
         return ys
 
@@ -283,5 +286,6 @@ class All2All(torch.autograd.Function):
             grad_output,
             output_split_sizes=ctx.input_splits,
             input_split_sizes=ctx.output_splits,
+            group=ctx.group
         )
-        return result, None, None
+        return result, None, None, None
