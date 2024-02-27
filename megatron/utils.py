@@ -443,6 +443,8 @@ def setup_for_inference_or_eval(
     else:
         neox_args.load = neox_args.save
     neox_args.build_tokenizer()
+    for i in range(len(neox_args.attention_config)):
+        neox_args.attention_config[i] = 'global' # It seems that flash attention does not support kv cache
 
     if neox_args.load is None:
         raise ValueError("`load` parameter must be supplied to load a model`")
