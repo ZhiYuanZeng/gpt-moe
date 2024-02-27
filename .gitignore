@@ -163,3 +163,8 @@ eval_scripts/
 
 tokenizers/
 exact_match/
+.volc/
+
+*.png
+*.pdf
+*.csv

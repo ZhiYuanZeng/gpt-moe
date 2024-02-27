@@ -34,9 +34,7 @@ import torch
         
 def main(args):
     print(args)
-    logger.info(f"{os.environ['http_proxy']=}")
     model, neox_args = setup_for_inference_or_eval(args, use_cache=False)
-    logger.info(f"{os.environ['http_proxy']=}")
     results = run_eval_harness(
         model,
         forward_step,
