@@ -45,7 +45,7 @@
 
    # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
    "zero_optimization": {
-    "stage": 1,
+    "stage": 2,
     "allgather_partitions": True,
     "allgather_bucket_size": 500000000,
     "overlap_comm": True,
@@ -87,7 +87,7 @@
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
    "warmup_iters": 1000,
-   "checkpoint_factor": 5000,
+   "checkpoint_factor": 2500,
    "eval_iters": -1,
 
    # logging
@@ -107,11 +107,11 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "./checkpoints/moefication/llama2_7b_32e_st",
+  "save": "./checkpoints/moefication/llama2_7b_32e_top1_st",
   "load": "./checkpoints/neox/converted-llama2-7B-32e",
   "finetune": true,
   "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_st_fixbug_orca/",
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_32e_top1_st/",
   # "log-dir": "./logs",
 
   "from_dense_to_moe": {

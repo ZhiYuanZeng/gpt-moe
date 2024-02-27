@@ -82,36 +82,33 @@
    },
 
    # misc. training settings
-   "train_iters": 10000,
-   "lr_decay_iters": 10000,
+   "train_iters": 20000,
+   "lr_decay_iters": 20000,
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
-   "warmup_iters": 1000,
-   "checkpoint_factor": 1250,
-   "eval_iters": -1,
+   "warmup_iters": 2000,
+   "checkpoint_factor": 2500,
+   "eval_iters": 50,
 
    # logging
    "log_interval": 1,
    "steps_per_print": 10,
    "wall_clock_breakdown": true,
 
-  "train-data-paths": ["./data/openorca/_text_document"],
-  "label-data-paths": ["./data/openorca/_label_document"],
-  "valid-data-paths": ["./data/openorca/_text_document"],
-  "test-data-paths": ["./data/openorca/_text_document"],
-  # "valid-data-paths": ["./data/slimpajama/slimpajama_llama/dev_text_document"],
-  # "test-data-paths": ["./data/slimpajama/slimpajama_llama/test_text_document"],
+  "train-data-paths": ["./data/proofpile2/algebraic-stack-train_text_document", "./data/proofpile2/arxiv-train_text_document", "./data/proofpile2/open-web-math-train_text_document"],
+  "valid-data-paths": ["./data/proofpile2/algebraic-stack-validation_text_document", "./data/proofpile2/arxiv-validation_text_document", "./data/proofpile2/open-web-math-validation_text_document"],
+  "test-data-paths": ["./data/proofpile2/algebraic-stack-test_text_document", "./data/proofpile2/arxiv-test_text_document", "./data/proofpile2/open-web-math-test_text_document"],
 
   "vocab-file": "./tokenizers/llama_tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "./checkpoints/moefication/llama2_7b_8e_top2",
+  "save": "./checkpoints/moefication/proofpile/llama2_7b_8e_top1+1",
   "load": "./checkpoints/neox/converted-llama2-7B-8e",
   "finetune": true,
   "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top2",
+  "tensorboard-dir": "tensorboard/moefication/proofpile/llama2_7b_8e_top1+1",
   # "log-dir": "./logs",
 
   "from_dense_to_moe": {
@@ -121,6 +118,8 @@
   "ep_world_size": 8,
   "moe_top_k": 2,
   "moe_min_capacity": 0,
+  "moe_capacity_factor": 0.5,
+  "moe_eval_capacity_factor": 0.5,
   "moe_freq": 2,
   "moe_aux_loss_weight": {
     "load_balance": 0.01,
@@ -129,5 +128,4 @@
     "kl_div": 0
   },
   "use_wandb": false,
-  "moe_gate_st": true,
 }

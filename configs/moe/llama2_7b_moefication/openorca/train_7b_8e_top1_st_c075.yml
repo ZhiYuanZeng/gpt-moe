@@ -87,7 +87,7 @@
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
    "warmup_iters": 1000,
-   "checkpoint_factor": 1250,
+   "checkpoint_factor": 2500,
    "eval_iters": -1,
 
    # logging
@@ -107,11 +107,11 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "./checkpoints/moefication/llama2_7b_8e_top2",
+  "save": "./checkpoints/moefication/llama2_7b_8e_top1_st_c15",
   "load": "./checkpoints/neox/converted-llama2-7B-8e",
   "finetune": true,
   "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top2",
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top1_st_c15",
   # "log-dir": "./logs",
 
   "from_dense_to_moe": {
@@ -119,7 +119,7 @@
   },
   "moe_num_experts": 8,
   "ep_world_size": 8,
-  "moe_top_k": 2,
+  "moe_top_k": 1,
   "moe_min_capacity": 0,
   "moe_freq": 2,
   "moe_aux_loss_weight": {
@@ -128,6 +128,8 @@
     "entropy": 0,
     "kl_div": 0
   },
+  "moe_capacity_factor": 0.75,
+  "moe_eval_capacity_factor": 0.75,
   "use_wandb": false,
-  "moe_gate_st": true,
+  "moe_gate_st": true
 }

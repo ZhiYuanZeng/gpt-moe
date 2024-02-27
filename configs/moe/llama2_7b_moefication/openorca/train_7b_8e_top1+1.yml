@@ -131,4 +131,5 @@
     "kl_div": 0
   },
   "use_wandb": false,
+  "moe_gate_st": true
 }

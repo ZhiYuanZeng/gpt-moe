@@ -107,11 +107,11 @@
   "launcher": "slurm",
   "deepspeed_slurm": false,
   
-  "save": "./checkpoints/moefication/llama2_7b_8e_top2",
+  "save": "./checkpoints/moefication/llama2_7b_8e_top2_no_detach",
   "load": "./checkpoints/neox/converted-llama2-7B-8e",
   "finetune": true,
   "load_iteration": 0,
-  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top2",
+  "tensorboard-dir": "tensorboard/moefication/llama2_7b_8e_top2_no_detach",
   # "log-dir": "./logs",
 
   "from_dense_to_moe": {
@@ -129,5 +129,5 @@
     "kl_div": 0
   },
   "use_wandb": false,
-  "moe_gate_st": true,
+  "moe_gate_st": false,
 }

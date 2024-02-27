@@ -87,7 +87,7 @@
    "distributed_backend": "nccl",
    "lr_decay_style": "cosine",
    "warmup_iters": 1000,
-   "checkpoint_factor": 1250,
+   "checkpoint_factor": 2500,
    "eval_iters": -1,
 
    # logging
@@ -121,6 +121,9 @@
   "ep_world_size": 8,
   "moe_top_k": 2,
   "moe_min_capacity": 0,
+  "moe_capacity_factor": 1.25,
+  "moe_eval_capacity_factor": 1.25,
+
   "moe_freq": 2,
   "moe_aux_loss_weight": {
     "load_balance": 0.01,
@@ -129,5 +132,4 @@
     "kl_div": 0
   },
   "use_wandb": false,
-  "moe_gate_st": true,
 }
