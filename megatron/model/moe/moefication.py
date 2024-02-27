@@ -4,10 +4,10 @@ from torch.nn import Module
 import torch
 from megatron.model.moe.baselayer import BaseLayer
 from megatron.model.moe.hier_moe import HierBalancedMoELayer, LocalGate, LocalExperts
+from megatron.model.moe.moefication_router import ShiftPriorityTopKGate, KthGate
 from deepspeed.utils.logging import log_dist
 from collections import OrderedDict
 from torch import Tensor
-
 class MoeFromDense(MoE):
     """
     the moe-from-dense model should be identical with the dense model at the beginning of the training
@@ -17,7 +17,7 @@ class MoeFromDense(MoE):
     def __init__(self, hidden_size, expert, num_experts=1, ep_size=1, k=1, capacity_factor=1, 
                  eval_capacity_factor=1, min_capacity=4, use_residual=False, noisy_gate_policy: str = None, 
                  drop_tokens: bool = True, use_rts=True, use_tutel: bool = False, enable_expert_tensor_parallelism: bool = False, 
-                 aux_loss_weight: dict = None, use_elbo=False, experts=None, post=None, hier_moe=None, gate_st=False, unrouted_type='all', **kwargs):
+                 aux_loss_weight: dict = None, use_elbo=False, experts=None, post=None, hier_moe=None, gate_st=False, unrouted_type='all', shift_priority=0, second_k=2, **kwargs):
         super(MoeFromDense, self).__init__(
             hidden_size=hidden_size, 
             expert=expert, 
@@ -36,8 +36,13 @@ class MoeFromDense(MoE):
             aux_loss_weight=aux_loss_weight,
             use_elbo=use_elbo,
             experts=experts,
-            gate_st=gate_st
+            gate_st=gate_st,
         )
+
+        if shift_priority != 0:
+            self.deepspeed_moe.gate = ShiftPriorityTopKGate.from_existing_gate(self.deepspeed_moe.gate, shift_priority=shift_priority)
+        elif second_k > 2:
+            self.deepspeed_moe.gate = KthGate.from_existing_gate(self.deepspeed_moe.gate, second_k=second_k)
         
         assert post is None or post in ['local', 'balanced'], post
         if post == 'local':
@@ -47,25 +52,25 @@ class MoeFromDense(MoE):
             self.deepspeed_moe = BalancedPostMoELayer.from_moe_layer(self.deepspeed_moe)
             self.deepspeed_moe.unrouted_type = unrouted_type
 
-        if hier_moe is not None:
-            inside_k = hier_moe['inside_k']
-            if experts is None:
-                experts = LocalExperts(expert, self.num_local_experts, self.expert_group_name)
-            else:
-                experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
-            gate_st = True
-            crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
-                                  use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
-            insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=inside_k, aux_loss_weight=aux_loss_weight, \
-                                    gate_st=gate_st, expert_group_name=self.expert_group_name)
-            self.deepspeed_moe = HierBalancedMoELayer(crossgpu_gate,
-                                insidegpu_gate,
-                                experts,
-                                self.expert_group_name,
-                                self.ep_size,
-                                self.num_local_experts,
-                                use_tutel=use_tutel,
-                                use_elbo=use_elbo)
+        # if hier_moe is not None:
+        #     inside_k = hier_moe['inside_k']
+        #     if experts is None:
+        #         experts = LocalExperts(expert, self.num_local_experts, self.expert_group_name)
+        #     else:
+        #         experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
+        #     gate_st = True
+        #     crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
+        #                           use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
+        #     insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=inside_k, aux_loss_weight=aux_loss_weight, \
+        #                             gate_st=gate_st, expert_group_name=self.expert_group_name)
+        #     self.deepspeed_moe = HierBalancedMoELayer(crossgpu_gate,
+        #                         insidegpu_gate,
+        #                         experts,
+        #                         self.expert_group_name,
+        #                         self.ep_size,
+        #                         self.num_local_experts,
+        #                         use_tutel=use_tutel,
+        #                         use_elbo=use_elbo)
 
 def assert_all_experts_are_same(experts):
     def assert_two_modules_are_same(m1, m2):
@@ -134,24 +139,28 @@ class LocalPostMoELayer(MOELayer):
 
         combine_weights_sum = dispatch_mask.sum(dim=-1).sum(dim=-1) # number of experts that each token is sent to
         if self.unrouted_type == 'all': # only tokens dropped at all top-k routings are post routed
-            routed_mask = (combine_weights_sum == 0)
+            routed_mask = (combine_weights_sum != 0)
         elif self.unrouted_type == 'any': # any dropped tokens are post routed
             routed_mask = (combine_weights_sum == self.gate.k) 
         elif self.unrouted_type == 'ignore_kth': # ignore the dropped tokens at the kth routing. only consider the dropped tokens at top-(k-1) routings
-            routed_mask = (combine_weights_sum >= self.k-1) # assume that the dropped routing must be the kth routing
+            routed_mask = (combine_weights_sum >= self.gate.k-1) # assume that the dropped routing must be the kth routing
         unrouted_mask = ~routed_mask
-        masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
 
         # postprocess unrouted tokens
+        masked_routing_probs = routing_probs[unrouted_mask].type_as(combined_output) # routing probs of unrouted tokens
         post_routing_outputs, post_routing_probs = self.post_routing(reshaped_inputs[unrouted_mask], masked_routing_probs)
 
         # normalization
-        topk_norm = topk_norm[unrouted_mask]
+        topk_norm = topk_norm[unrouted_mask].unsqueeze(dim=-1).type_as(combined_output)
+
         assert topk_norm.shape == post_routing_probs.shape, f'{topk_norm.shape=}, {post_routing_probs.shape=}'
-        new_norm = torch.clamp(topk_norm+post_routing_probs * (self.gate.k-combine_weights_sum[unrouted_mask]), 
-                               min=torch.finfo(combine_weights.dtype).eps).detach()
+        local_scale = (self.gate.k-combine_weights_sum[unrouted_mask].unsqueeze(dim=-1)).detach().type_as(combined_output)
+        local_norm = (post_routing_probs * local_scale).detach()
+
+        new_norm = torch.clamp(topk_norm + local_norm, min=torch.finfo(combine_weights.dtype).eps)
         combined_output[unrouted_mask] = (
-            post_routing_outputs * post_routing_probs + topk_norm * combined_output[unrouted_mask]) / new_norm
+            post_routing_outputs * post_routing_probs * local_scale \
+                  + topk_norm * combined_output[unrouted_mask]) / new_norm
         out = combined_output.reshape(inputs[0].shape)
         
         return out
@@ -166,7 +175,7 @@ class LocalPostMoELayer(MOELayer):
         local_routing_scores = routing_scores[:, expert_indices]
 
         if self.num_local_experts == 1:           
-            return self.experts(inputs), local_routing_scores.squeeze(dim=-1)
+            return self.experts(inputs), local_routing_scores
         else:
             # top1 routing inside gpu
             top1_routing_scores, top1_routing_indices = torch.max(
@@ -174,8 +183,11 @@ class LocalPostMoELayer(MOELayer):
 
             y = torch.empty_like(inputs)
             for i, expert in enumerate(self.experts.deepspeed_experts):
-                y[top1_routing_indices == i] = expert(inputs[top1_routing_indices == i])
-            return y, top1_routing_scores
+                expert_output = expert(inputs[top1_routing_indices == i])
+                if isinstance(expert_output, tuple):
+                    expert_output = expert_output[0]
+                y[top1_routing_indices == i] = expert_output
+            return y, top1_routing_scores.unsqueeze(dim=-1)
 
 class BaseLayerNoStateDict(BaseLayer):
     def state_dict(self, *args, **kwargs):
