@@ -356,13 +356,13 @@ class ParallelSelfAttention(nn.Module):
         else:
             self.rotary_emb = None
 
-        self.attention_type = neox_args.attention_config[layer_number]
-        self.use_flash_attention = self.attention_type == "flash"
-        self.sparse = self.attention_type not in ("global", "flash")
+        self.attention_config = neox_args.attention_config[layer_number]
+        self.use_flash_attention = self.attention_config == "flash"
+        self.sparse = self.attention_config not in ("global", "flash")
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
-                self.attention_type,
+                self.attention_config,
                 self.num_attention_heads_per_partition,
                 mpu=mpu,
             )
@@ -447,11 +447,11 @@ class ParallelSelfAttention(nn.Module):
         # ==================================================
         if self.use_cache:
             with torch.no_grad():
-                # print_rank_0(f' before transform, {attention_mask.shape}=')
+                # print_rank_0(f' before transform, {attention_mask.shape=}')
                 attention_mask = attention_mask[
                     ..., : attention_scores.size(3), : attention_scores.size(3)
                 ]
-                # print_rank_0(f'after transform, {attention_scores.shape}, {attention_mask.shape}')
+                # print_rank_0(f'{attention_scores.shape=}, {attention_mask.shape=}')
 
 
         # ===========================
@@ -730,7 +730,7 @@ class ParallelSelfAttention(nn.Module):
 
         if self.use_cache:
             present = torch.stack((key_layer, value_layer))
-
+            assert not self.use_flash_attention and not self.sparse, self.attention_config
         if self.use_flash_attention:
             context_layer = self.flash_attention(query_layer, key_layer, value_layer)
         elif not self.sparse:
