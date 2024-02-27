@@ -188,13 +188,26 @@ def pretrain(neox_args):
         use_wandb=neox_args.use_wandb, tensorboard_writer=neox_args.tensorboard_writer
     )
 
+    if neox_args.train_iters <= 0:
+        # do_valid or do_test only
+        neox_args.optimizer = None
+        neox_args.no_load_optim = True
+        neox_args.zero_optimization = None
+        neox_args.ep_world_size = 8
+        neox_args.finetune = False
+        neox_args.load = neox_args.save
+        neox_args.save = None
+        neox_args.label_data_paths = None
+        neox_args.eval_iters = 100
+        if neox_args.load_for_eval is not None:
+            neox_args.load = neox_args.load_for_eval
+    
     # Initialize and get arguments, timers, and Tensorboard writer.
     initialize_megatron(neox_args=neox_args)
 
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
-    if neox_args.train_iters <= 0:
-        neox_args.optimizer = None
+
     model, optimizer, lr_scheduler = setup_model_and_optimizer(
         neox_args=neox_args, use_cache=False
     )
@@ -238,8 +251,9 @@ def pretrain(neox_args):
             train_data_iterator=train_data_iterator,
             valid_data_iterator=valid_data_iterator,
         )
-
+    
     if neox_args.do_valid:
+        print_rank_0("do validation....")
         prefix = "the end of training for val data"
         evaluate_and_print_results(
             neox_args=neox_args,
@@ -262,6 +276,7 @@ def pretrain(neox_args):
         )
 
     if neox_args.do_test:
+        print_rank_0("do test....")
         # Run on test data.
         prefix = "the end of training for test data"
         evaluate_and_print_results(
@@ -1163,6 +1178,7 @@ def evaluate_and_print_results(
     chart_name="validation",
 ):
     """Helper function to evaluate and dump results on screen."""
+    timers("eval time").start()
     total_loss_dict = evaluate(
         neox_args=neox_args,
         forward_step_fn=forward_step_func,
@@ -1171,7 +1187,17 @@ def evaluate_and_print_results(
         verbose=verbose,
         timers=timers,
     )
-    string = f" {chart_name} results at {prefix} | "
+    timers("eval time").stop()
+    eval_time = timers("eval time").elapsed_
+    timers("eval time").reset()
+
+    world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized else 1
+    eval_time_per_step = eval_time / neox_args.eval_iters
+    tokens_per_second = neox_args.seq_length * neox_args.train_batch_size / eval_time_per_step
+    tokens_per_second_per_gpu = tokens_per_second / world_size
+
+    string = "eval_tokens_per_gpu/sec: {:.3f} |".format(tokens_per_second_per_gpu)
+    string += f" {chart_name} results at {prefix} | "
     for k, v in total_loss_dict.items():
         if isinstance(v, dict):
             if neox_args.eval_tasks and "results" in v:
@@ -1209,7 +1235,6 @@ def evaluate_and_print_results(
                 use_wandb=neox_args.use_wandb,
                 tensorboard_writer=neox_args.tensorboard_writer,
             )
-
     length = len(string) + 1
     print_rank_0("-" * length)
     print_rank_0(string)
