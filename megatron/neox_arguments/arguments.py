@@ -307,7 +307,13 @@ class NeoXArgs(*BASE_CLASSES):
             "--load_for_eval",
             type=str,
             default=None,
-            help="",
+            help="the load directory for evaluation, if not set, the save directory is used for loading checkpoints for evaluation",
+        )
+        group.add_argument(
+            "--train_iters",
+            type=int,
+            default=None,
+            help="set to -1, if not do train",
         )
         group.add_argument(
             "--eval_results_prefix",
