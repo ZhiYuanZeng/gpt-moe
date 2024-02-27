@@ -12,21 +12,22 @@ from functools import partial
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
     def __init__(self, neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe=None, rotary=False, use_cache=False, experts = None):
         super().__init__(neox_args, attention_mask_func, init_method, output_layer_init_method, layer_number, rpe, rotary, use_cache)
+        ep_world_size = min(neox_args.ep_world_size, torch.distributed.get_world_size())
         if neox_args.moe_share_layers is not None and neox_args.moe_share_layers['num_z']>1:
             MOE_CLS = LayerAwareMoE
         elif neox_args.from_dense_to_moe is not None:
             MOE_CLS = partial(MoeFromDense, **neox_args.from_dense_to_moe)
-        elif neox_args.hier_moe is not None:
-            MOE_CLS = partial(HierMoE, **neox_args.hier_moe)
         elif neox_args.moe_base_layer:
             MOE_CLS = BaseLayerMoE
+        elif neox_args.hier_moe is not None:
+            MOE_CLS = partial(HierMoE, **neox_args.hier_moe)
         else:
             MOE_CLS = deepspeed.moe.layer.MoE
         self.moe_layer = MOE_CLS(
                         hidden_size=neox_args.hidden_size,
                         expert=self.mlp,
                         num_experts=neox_args.moe_num_experts,
-                        ep_size=neox_args.ep_world_size,
+                        ep_size=ep_world_size,
                         k=neox_args.moe_top_k,
                         capacity_factor=neox_args.moe_capacity_factor,
                         eval_capacity_factor=neox_args.moe_eval_capacity_factor,
@@ -38,8 +39,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         experts=experts,
                         gate_st=neox_args.moe_gate_st,
                         drop_tokens=neox_args.moe_drop_tokens)
-        assert neox_args.moe_aux_loss_weight is not None 
-        print_rank_0(neox_args.moe_aux_loss_weight)
+        # assert neox_args.moe_aux_loss_weight is not None 
+        # print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
             if 'bias' in name: # share bias paramters
                 setattr(param, 'allreduce', True)
