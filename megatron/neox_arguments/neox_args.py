@@ -427,7 +427,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
     moe_use_elbo: bool = False
     # choices: "zero", "from_dense_single_layer", "from_dense_all_layers", "no"
 
-    hier_moe: bool = False
+    hier_moe: dict = None
 
     moe_gate_st:bool = False
 
