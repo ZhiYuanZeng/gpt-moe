@@ -105,7 +105,7 @@
   "vocab-file": "./tokenizers/llama_tokenizer.model",
   "tokenizer_type": "SPMTokenizer",
   "launcher": "slurm",
-  "deepspeed_slurm": false,
+  "deepspeed_slurm": true
   
   "save": "./checkpoints/moefication/llama2_7b_32e_top3_orca/",
   "load": "./checkpoints/neox/converted-llama2-7B-32e",

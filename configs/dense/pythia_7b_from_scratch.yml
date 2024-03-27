@@ -98,7 +98,7 @@
   "merge-file": "data/gpt2-merges.txt",
 
   "launcher": "slurm",
-  "deepspeed_slurm": false,
+  "deepspeed_slurm": true
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia_7b_from_scratch/",
   # "load": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia_1b_from_scratch/",
   "tensorboard-dir": "tensorboard/dense/pythia/pythia_7b_from_scratch/",

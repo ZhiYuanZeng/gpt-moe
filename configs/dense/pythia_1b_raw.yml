@@ -96,5 +96,5 @@
   "vocab-file": "./20B_tokenizer.json",
 
   "launcher": "slurm",
-  "deepspeed_slurm": false,
+  "deepspeed_slurm": true
 }

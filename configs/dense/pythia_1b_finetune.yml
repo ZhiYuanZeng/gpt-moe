@@ -100,7 +100,7 @@
   # "merge-file": "data/gpt2-merges.txt",
 
   "launcher": "slurm",
-  "deepspeed_slurm": false,
+  "deepspeed_slurm": true
   "save": "s3://P_model_weights/zengzhiyuan/checkpoints/dense/pythia_1b_finetune_on_slimpajama/",
   "load": "./checkpoints/dense/pythia-1b/",
   "tensorboard-dir": "tensorboard/dense/pythia/pythia_1b_finetune_on_slimpajama/",
