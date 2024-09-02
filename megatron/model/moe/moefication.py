@@ -52,26 +52,6 @@ class MoeFromDense(MoE):
             self.deepspeed_moe = BalancedPostMoELayer.from_moe_layer(self.deepspeed_moe)
             self.deepspeed_moe.unrouted_type = unrouted_type
 
-        # if hier_moe is not None:
-        #     inside_k = hier_moe['inside_k']
-        #     if experts is None:
-        #         experts = LocalExperts(expert, self.num_local_experts, self.expert_group_name)
-        #     else:
-        #         experts = LocalExperts.from_existing_experts(experts, expert_group_name=self.expert_group_name)
-        #     gate_st = True
-        #     crossgpu_gate = TopKGate(hidden_size, ep_size, k, capacity_factor, eval_capacity_factor, min_capacity, noisy_gate_policy, drop_tokens, \
-        #                           use_rts, aux_loss_weight=aux_loss_weight, gate_st=gate_st)
-        #     insidegpu_gate = LocalGate(hidden_size, num_experts=self.num_local_experts, k=inside_k, aux_loss_weight=aux_loss_weight, \
-        #                             gate_st=gate_st, expert_group_name=self.expert_group_name)
-        #     self.deepspeed_moe = HierBalancedMoELayer(crossgpu_gate,
-        #                         insidegpu_gate,
-        #                         experts,
-        #                         self.expert_group_name,
-        #                         self.ep_size,
-        #                         self.num_local_experts,
-        #                         use_tutel=use_tutel,
-        #                         use_elbo=use_elbo)
-
 def assert_all_experts_are_same(experts):
     def assert_two_modules_are_same(m1, m2):
         for p1, p2 in zip(m1.parameters(), m2.parameters()):
