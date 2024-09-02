@@ -28,6 +28,7 @@ pip install -e patched_deepspeed/
 
 
 ## Citation
+```
 @misc{zeng2024turnwasteworthrectifying,
       title={Turn Waste into Worth: Rectifying Top-$k$ Router of MoE}, 
       author={Zhiyuan Zeng and Qipeng Guo and Zhaoye Fei and Zhangyue Yin and Yunhua Zhou and Linyang Li and Tianxiang Sun and Hang Yan and Dahua Lin and Xipeng Qiu},
@@ -37,3 +38,4 @@ pip install -e patched_deepspeed/
       primaryClass={cs.LG},
       url={https://arxiv.org/abs/2402.12399}, 
 }
+```
