@@ -422,6 +422,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
      the more parameters are shared.
     """
 
+    moe_use_rts: bool = False
+
     from_dense_to_moe: dict = None
 
     moe_use_elbo: bool = False
@@ -434,6 +436,8 @@ class NeoXArgsModel(NeoXArgsTemplate):
     moe_base_layer: bool = False
 
     moe_drop_tokens: bool = True
+    
+    moe_expert_choices: bool = False
 
 @dataclass
 class NeoXArgsOptimizer(NeoXArgsTemplate):

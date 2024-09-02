@@ -7,6 +7,7 @@ from megatron.model.moe.share_layer_moe import LayerAwareMoE
 from megatron.model.moe.moefication import MoeFromDense
 from megatron.model.moe.hier_moe import HierMoE
 from megatron.model.moe.baselayer import BaseLayerMoE
+from megatron.model.moe.expert_choices import ExpertChoiceMoE
 from functools import partial 
 
 class MoEParallelTransformerLayer(ParallelTransformerLayer):
@@ -19,6 +20,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
             MOE_CLS = partial(MoeFromDense, **neox_args.from_dense_to_moe)
         elif neox_args.moe_base_layer:
             MOE_CLS = BaseLayerMoE
+        elif neox_args.moe_expert_choices:
+            MOE_CLS = ExpertChoiceMoE
         elif neox_args.hier_moe is not None:
             MOE_CLS = partial(HierMoE, **neox_args.hier_moe)
         else:
@@ -38,7 +41,8 @@ class MoEParallelTransformerLayer(ParallelTransformerLayer):
                         use_elbo=neox_args.moe_use_elbo,
                         experts=experts,
                         gate_st=neox_args.moe_gate_st,
-                        drop_tokens=neox_args.moe_drop_tokens)
+                        drop_tokens=neox_args.moe_drop_tokens,
+                        use_rts=neox_args.moe_use_rts)
         # assert neox_args.moe_aux_loss_weight is not None 
         # print_rank_0(neox_args.moe_aux_loss_weight)
         for name,param in self.moe_layer.named_parameters():
