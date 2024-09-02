@@ -168,3 +168,6 @@ exact_match/
 *.png
 *.pdf
 *.csv
+
+patched_deepspeed/
+ckpts/
